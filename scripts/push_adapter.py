@@ -26,6 +26,7 @@ DEFAULT_REPO_ID = "dmnsjk/qwen2.5-vl-7b-cord-json-lora"
 
 # Per the brief: the adapter is tagged for document parsing and for the image-text-to-text
 # task so it is discoverable from both the task filter and the topic filter.
+SOURCE_REPO = "https://github.com/dmn-sjk/vlm_finetuning"
 PIPELINE_TAG = "image-text-to-text"
 TAGS = ["document-parsing", "image-text-to-text", "lora", "peft", "qwen2_5_vl", "vlm", "json-extraction"]
 
@@ -101,6 +102,7 @@ def build_card(args, run_config: dict | None) -> str:
         "---",
         "",
     ]
+    source_repo = SOURCE_REPO
     body = f"""# Qwen2.5-VL-7B LoRA — structured document parsing (CORD-v2)
 
 A LoRA adapter for `{base}` that makes the model emit **schema-conformant JSON directly**
@@ -132,8 +134,15 @@ model = PeftModel.from_pretrained(model, "{args.repo_id}")
 processor = AutoProcessor.from_pretrained("{args.repo_id}")
 ```
 
-See `src/infer/predict.py` in the source repository for a complete example, including
-`--merge` (merge_and_unload) for faster serving.
+## Source code
+
+Training pipeline, SLURM sbatch scripts and Accelerate/FSDP configs:
+**[{source_repo}]({source_repo})**
+
+See [`src/infer/predict.py`]({source_repo}/blob/master/src/infer/predict.py) there for a
+complete inference example, including `--merge` (`merge_and_unload`) for faster serving,
+and [`md_files/PROGRESS.md`]({source_repo}/blob/master/md_files/PROGRESS.md) for the full
+engineering log of the run.
 
 ## Training configuration
 
