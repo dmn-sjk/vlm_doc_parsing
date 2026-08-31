@@ -1,0 +1,19 @@
+# secrets
+.env
+*.token
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# runtime artifacts
+logs/
+slurm-*.out
+wandb/
+outputs/
+checkpoints/
+*.log
+.ipynb_checkpoints/
