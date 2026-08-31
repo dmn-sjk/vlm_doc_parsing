@@ -1,0 +1,102 @@
+# FSDP (v1, FULL_SHARD) for Qwen2.5-VL-7B + LoRA, driven by `accelerate launch`.
+#
+# Every value below was checked against the installed accelerate 1.14.0 /
+# transformers 5.16.1 / peft 0.20.0 sources; the reasoning is in md_files/PHASE2.md.
+# `num_processes`, `num_machines`, `machine_rank`, `main_process_ip` and
+# `main_process_port` are intentionally left at their single-node defaults and are
+# overridden on the `accelerate launch` command line by slurm/train_multinode.sbatch.
+
+compute_environment: LOCAL_MACHINE
+distributed_type: FSDP
+# bf16 everywhere. A100 has native bf16; the checkpoint itself is bf16, and accelerate
+# turns this into MixedPrecision(param_dtype=bf16, reduce_dtype=bf16, buffer_dtype=bf16)
+# (accelerate/utils/dataclasses.py:2117-2124). Only FSDP units whose flat param requires
+# grad get upcast to fp32 afterwards (accelerate/accelerator.py:1990-2029) -- with LoRA
+# that is just the ~81 M adapter parameters, not the frozen 8.2 B base.
+mixed_precision: bf16
+downcast_bf16: false
+use_cpu: false
+debug: false
+enable_cpu_affinity: false
+machine_rank: 0
+num_machines: 1
+num_processes: 8
+rdzv_backend: static
+same_network: true
+main_training_function: main
+
+fsdp_config:
+  # FSDP1, not FSDP2. `use_orig_params` (the fix for mixing a frozen ViT with trainable
+  # LoRA params) exists only in FSDP1; it is documented as obsolete in FSDP2
+  # (accelerate/utils/dataclasses.py:1756-1759). FSDP1 is also the path
+  # `Trainer.save_model` special-cases for a FULL_STATE_DICT gather
+  # (transformers/trainer.py:3826-3830).
+  fsdp_version: 1
+
+  # Shard params + grads + optimizer state across all 16 ranks. The 8.2 B bf16 base is
+  # ~16.6 GB; FULL_SHARD puts ~1.0 GB of weights on each of 16 A100s and leaves the rest
+  # of the 80 GB for visual activations, which are the real consumer here.
+  fsdp_sharding_strategy: FULL_SHARD
+  fsdp_reshard_after_forward: FULL_SHARD
+  fsdp_offload_params: false          # not needed; CPU offload would throttle the run
+
+  # Auto-wrap. Both class names were read out of
+  # transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py:
+  #   Qwen2_5_VLDecoderLayer  -> line 692   (the 28 text-decoder blocks)
+  #   Qwen2_5_VLVisionBlock   -> line 294   (the 32 ViT blocks)
+  # and they are exactly the model's own `_no_split_modules` (line 330 / 881).
+  # Naming the vision block matters: without it the whole 677 M-parameter ViT collapses
+  # into the root FSDP unit and is all-gathered in one shot on every forward.
+  #
+  # NB: when the model is a PeftModel, transformers *replaces* this policy with
+  # `peft.utils.other.fsdp_auto_wrap_policy(model)`
+  # (transformers/distributed/fsdp.py:257-269, called from trainer.py:1621). That helper
+  # still reads FSDP_TRANSFORMER_CLS_TO_WRAP -- i.e. the value below -- and ORs it with a
+  # lambda policy that wraps every leaf module whose weight requires grad
+  # (peft/utils/other.py:1269-1295). Net effect: decoder layers, vision blocks, and each
+  # LoRA A/B linear each become their own FSDP unit. That is what we want.
+  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  fsdp_transformer_layer_cls_to_wrap: Qwen2_5_VLDecoderLayer,Qwen2_5_VLVisionBlock
+
+  # Gotcha #4. The ViT is frozen and the LoRA adapters are not, so FSDP units can contain
+  # a mix of requires_grad=True/False parameters. use_orig_params=True is what makes that
+  # legal, and it is also what lets the optimizer (created *after* wrapping, because
+  # Trainer delays optimizer creation under FSDP -- trainer.py:1591) see the original
+  # parameter objects, and what keeps `named_parameters()` returning the real names that
+  # PEFT's state-dict filter matches on.
+  fsdp_use_orig_params: true
+
+  # Only local rank 0 on each node reads the 16 GB checkpoint; every other rank builds
+  # zero-filled CPU tensors and receives the real weights via the FSDP init broadcast
+  # (transformers/modeling_utils.py:4790-4797). Without this, 8 ranks x 16 GB = 133 GB of
+  # host RAM per node just to start. sync_module_states is mandatory with it -- accelerate
+  # raises if it is false (accelerate/utils/launch.py:306) -- and it also guarantees every
+  # rank starts from rank 0's randomly initialised LoRA A matrices.
+  fsdp_cpu_ram_efficient_loading: true
+  fsdp_sync_module_states: true
+
+  # FULL_STATE_DICT, deliberately. `Trainer.save_model` under FSDP only saves when the
+  # state dict type contains "FULL_STATE_DICT" (transformers/trainer.py:3827) and there is
+  # no else branch -- with SHARDED_STATE_DICT the final adapter is silently never written.
+  # FULL_STATE_DICT gathers to CPU on rank 0 only
+  # (accelerate/utils/dataclasses.py:2039-2041), which is what makes the rank-0
+  # save_pretrained correct rather than empty.
+  fsdp_state_dict_type: FULL_STATE_DICT
+
+  # Overlap the next unit's all-gather with the current backward. BACKWARD_PRE is the
+  # faster of the two at a small extra memory cost we can afford at this shard size.
+  fsdp_backward_prefetch: BACKWARD_PRE
+  fsdp_forward_prefetch: false
+
+  # OFF on purpose -- checkpointing is done by transformers instead, via
+  # `gradient_checkpointing=True` + `use_reentrant=False` in SFTConfig. The two are
+  # mutually exclusive (transformers/trainer.py:844 raises if both are set), and
+  # accelerate applies FSDP activation checkpointing with `fsdp_plugin.auto_wrap_policy`
+  # as the check function (accelerator.py:1972-1979). Under PEFT that policy has been
+  # swapped for peft's OR-policy, so FSDP would wrap every individual LoRA linear in a
+  # checkpoint wrapper -- pure overhead. transformers instead checkpoints exactly the
+  # `GradientCheckpointingLayer` subclasses, which for this model are precisely
+  # Qwen2_5_VLDecoderLayer and Qwen2_5_VLVisionBlock.
+  fsdp_activation_checkpointing: false
+
+  fsdp_min_num_params: 0              # unused with TRANSFORMER_BASED_WRAP

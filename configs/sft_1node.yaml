@@ -1,0 +1,80 @@
+# Production run: 1 node x 8 A100 (8 ranks), FSDP FULL_SHARD + LoRA, 3 epochs on
+# CORD-v2. Pair with configs/accelerate_fsdp.yaml and slurm/train_1node.sbatch.
+#
+# Sizing (measured on the real CORD-v2 train split, 800 rows, see md_files/PHASE2.md):
+#   image pixels          p50 1.12 Mpx, p95 9.44 Mpx, max 9.44 Mpx
+#   uncapped visual tokens p50 1428, p95 12037   <- why max_pixels is not optional
+#   gt_parse JSON tokens   p50  123, p95   300, max 682
+# With max_pixels = 1280 * 28 * 28 the visual span is capped at 1280 tokens, so the
+# longest sequence we can build is 1280 + ~150 prompt + 682 completion ~= 2.1 k tokens,
+# comfortably under max_length=4096. Nothing gets truncated, which matters because
+# truncation_mode is forced to "keep_start" for vision datasets: a too-small max_length
+# would silently cut the JSON answer off the end of the label.
+
+data:
+  dataset_id: naver-clova-ix/cord-v2
+  train_split: train
+  eval_split: validation
+  test_split: test
+  max_train_samples: null
+  max_eval_samples: null
+  min_pixels: 200704     #  256 * 28 * 28 -> floor of 256 visual tokens
+  max_pixels: 1003520    # 1280 * 28 * 28 -> ceiling of 1280 visual tokens
+  max_length: 4096
+  group_by_length: true
+  num_proc: 8
+  seed: 42
+
+model:
+  base_model: Qwen/Qwen2.5-VL-7B-Instruct
+  attn_implementation: sdpa
+  dtype: bfloat16
+  freeze_vision_tower: true
+  gradient_checkpointing: true
+  lora:
+    r: 32
+    alpha: 64            # alpha = 2r, the usual scaling for r >= 16
+    dropout: 0.05
+    bias: none
+    # Text-decoder attention + MLP only: 28 layers x 7 projections = 196 modules,
+    # 80.7 M trainable params. The ViT's own MLP also has gate/up/down_proj, so these
+    # names would match 96 modules inside the frozen vision tower -- train_sft.py adds
+    # exclude_modules=r"model\.visual\..*" when adapt_vision_tower is false.
+    target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+    adapt_vision_tower: false
+    modules_to_save: []  # must stay empty: lm_head in here breaks loss_type=chunked_nll
+
+train:
+  output_dir: ${SCRATCH}/vlm_finetuning/runs/cord-lora-1n8g
+  run_name: qwen25vl-cord-lora-1n8g
+
+  # 8 ranks x 2 per device x 2 accumulation = global batch 32 -- identical optimisation
+  # trajectory to the 2-node shape, just half the ranks doing twice the work.
+  # 800 / 32 = 25 optimizer steps per epoch; 3 epochs = 75 steps.
+  # A100 here is the 40 GB SXM4 part, NOT 80 GB -- verified by nvidia-smi on t0006/t0011.
+  num_train_epochs: 3.0
+  max_steps: -1
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 2
+
+  learning_rate: 1.0e-4
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.05     # ~4 of 75 steps
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+
+  logging_steps: 1
+  eval_strategy: steps
+  eval_steps: 25         # once per epoch
+  save_strategy: steps
+  save_steps: 25
+  save_total_limit: 3
+
+  bf16: true
+  seed: 42
+  report_to: wandb       # WANDB_PROJECT is exported by the sbatch script, never in code
+  loss_type: chunked_nll
+  completion_only_loss: true
+  packing: false
+  padding_free: false
