@@ -484,3 +484,51 @@ Jobs run, in order: 3108434 smoke PASS, 3108482 FAIL (my YAML `no` bug), 3108487
 3108496 FAIL (dataset cache race), 3108780 2-GPU PASS, 3108796 **production PASS**,
 3108958/3108959 eval PASS, 3108989 inference PASS, 3108801 FAIL (shell quoting),
 3109090 2-node PASS.
+
+---
+
+## Did FSDP make training faster? No — data parallelism did.
+
+Worth recording explicitly, because "we used FSDP and it trained in 14 minutes" is an easy
+sentence to write and a misleading one.
+
+Measured `train_samples_per_second`, same config, varying only the rank count:
+
+| Shape | samples/s | vs 1 GPU | scaling efficiency |
+| --- | --- | --- | --- |
+| 1 GPU, unsharded (no FSDP), job 3108487 | 0.556 | 1.0x | — |
+| 2 GPU `FULL_SHARD`, job 3108780 | 0.874 | 1.57x | 79% |
+| **8 GPU `FULL_SHARD`, job 3108796 (production)** | **2.783** | **5.0x** | 63% |
+| 16 GPU / 2 nodes `FULL_SHARD`, job 3109090 | 4.503 | 8.1x | 51% |
+
+The production run was **~5x faster** than a single GPU: 14.4 minutes instead of roughly 72.
+
+**But the speedup comes from splitting the batch across 8 GPUs, not from sharding.** Plain
+DDP would deliver the same parallel speedup and would very likely be *slightly faster* than
+FSDP here: `FULL_SHARD` all-gathers parameters before every forward and backward, whereas
+DDP keeps weights resident and only all-reduces gradients. **FSDP trades throughput for
+memory.** We never benchmarked DDP, so the size of that penalty is unmeasured here — the
+claim is directional, from what the algorithms do, not from a measurement.
+
+For this particular job **FSDP bought nothing that was needed**: at 22.62 GiB unsharded the
+model already fits on one 40 GB A100, so there was no memory wall to break. The
+configuration is real, correct, and exercised — and it is what `PROJECT.md` asked for — but
+the honest claim is the memory one, not a speed one:
+
+> ~5x wall-clock speedup from 8-way data parallelism; FSDP `FULL_SHARD` cut per-rank memory
+> from 22.62 GiB to 12.73 GiB, which is what would make a larger model, a higher resolution
+> cap, or full-parameter fine-tuning feasible on this hardware.
+
+### Caveats on these numbers
+
+- **Only the 8-GPU row is a full 3-epoch run.** The others are 4-10 step probes whose
+  30-70 s runtimes are substantially model load, first-step warmup and NCCL init. That
+  inflates the apparent penalty at small scale, so the efficiency column is rougher than the
+  two significant figures suggest.
+- **The falling efficiency is expected, not a fabric problem.** With 800 examples at global
+  batch 32, each rank sees very little work per step, so communication dominates as ranks
+  are added. The 2-node run was confirmed running on InfiniBand with GPUDirect RDMA
+  (`Using network IB`, `mlx5_0`, 200 Gb/s), not a TCP fallback.
+- Comparing the 1-GPU row to the rest also changes one thing besides FSDP: the single-GPU
+  probe held the whole model resident. It is a throughput baseline, not a controlled
+  FSDP-vs-DDP experiment.
