@@ -26,7 +26,7 @@ DEFAULT_REPO_ID = "dmnsjk/qwen2.5-vl-7b-cord-json-lora"
 
 # Per the brief: the adapter is tagged for document parsing and for the image-text-to-text
 # task so it is discoverable from both the task filter and the topic filter.
-SOURCE_REPO = "https://github.com/dmn-sjk/vlm_finetuning"
+SOURCE_REPO = "https://github.com/dmn-sjk/vlm_doc_parsing.git"
 PIPELINE_TAG = "image-text-to-text"
 TAGS = ["document-parsing", "image-text-to-text", "lora", "peft", "qwen2_5_vl", "vlm", "json-extraction"]
 
@@ -118,8 +118,7 @@ invented fields. Treat this as a formatting-and-schema adapter, not a better OCR
 Trained with TRL `SFTTrainer` in the **prompt-completion** format
 (`completion_only_loss=True`, so the loss covers only the JSON answer) under PyTorch FSDP
 `FULL_SHARD` via Hugging Face Accelerate on a SLURM cluster. The released adapter comes
-from a **1 node x 8 A100 (40 GB)** run, 14.4 minutes of training; the same configuration was
-separately verified across **2 nodes / 16 ranks** over InfiniBand.
+from a 1 node x 8 A100 (40 GB) run, 14.4 minutes of training.
 
 ## Usage
 
@@ -133,16 +132,6 @@ model = Qwen2_5_VLForConditionalGeneration.from_pretrained(base, dtype=torch.bfl
 model = PeftModel.from_pretrained(model, "{args.repo_id}")
 processor = AutoProcessor.from_pretrained("{args.repo_id}")
 ```
-
-## Source code
-
-Training pipeline, SLURM sbatch scripts and Accelerate/FSDP configs:
-**[{source_repo}]({source_repo})**
-
-See [`src/infer/predict.py`]({source_repo}/blob/master/src/infer/predict.py) there for a
-complete inference example, including `--merge` (`merge_and_unload`) for faster serving,
-and [`md_files/PROGRESS.md`]({source_repo}/blob/master/md_files/PROGRESS.md) for the full
-engineering log of the run.
 
 ## Training configuration
 
@@ -181,12 +170,20 @@ extracts every field but emits a trailing comma scores zero downstream. "Strict"
   name). Normalised edit similarity is {edit_sim}, so errors are typically small rather
   than structural — but this is not a solved extraction task.
 - **The schema is fixed** by the system prompt this adapter was trained with (see
-  `run_config.yaml`). Prompting it for a different key set will degrade it; the adapter has
+  `run_config.yaml`). Prompting it for a different key set will degrade it. The adapter has
   been specialised toward one output shape.
 - **Field scoring ignores list order** (receipt line items are treated as an unordered
   bag), so ordering mistakes are not penalised.
 - Resolution is capped at `max_pixels` (see the table above). Documents far denser than a
   receipt may lose legibility at that cap.
+
+## Source code
+
+Training pipeline, SLURM sbatch scripts and Accelerate/FSDP configs:
+**[{source_repo}]({source_repo})**
+
+See [`src/infer/predict.py`]({source_repo}/blob/master/src/infer/predict.py) there for a
+complete inference example, including `--merge` (`merge_and_unload`) for faster serving.
 """
     return "\n".join(front) + body
 
