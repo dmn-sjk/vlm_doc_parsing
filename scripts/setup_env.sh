@@ -1,41 +1,36 @@
 #!/usr/bin/env bash
-# Build the project venv on $SCRATCH (home is small and nearly full).
-# Run on a LOGIN NODE -- compute nodes may have no outbound internet.
+# Reproduce the project environment from pyproject.toml + uv.lock.
+#
+# Run on a LOGIN NODE: compute nodes have no reliable outbound internet, and the venv is
+# ~7 GB of wheels.
+#
+# The environment is deliberately NOT the default `.venv` next to pyproject.toml -- this
+# repo lives in $HOME, which is a 10 GiB quota already ~95% full. UV_PROJECT_ENVIRONMENT
+# redirects it to $SCRATCH. Note $SCRATCH is purged storage: if the venv disappears, this
+# script rebuilds it byte-identically from uv.lock, which is the reason the lock is
+# committed.
 set -euo pipefail
 
+PROJ_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROJ_SCRATCH="${SCRATCH:?SCRATCH not set}/vlm_finetuning"
-VENV="${PROJ_SCRATCH}/venvs/vlm"
-export UV_CACHE_DIR="${PROJ_SCRATCH}/.uv-cache"
 
+export UV_PROJECT_ENVIRONMENT="${PROJ_SCRATCH}/venvs/vlm"
+export UV_CACHE_DIR="${PROJ_SCRATCH}/.uv-cache"
 mkdir -p "${PROJ_SCRATCH}/venvs" "${UV_CACHE_DIR}"
 
 command -v uv >/dev/null || { echo "uv not on PATH (expected ~/.local/bin/uv)"; exit 1; }
 
-uv venv --python 3.12 "${VENV}"
+cd "${PROJ_ROOT}"
 
-VPY="${VENV}/bin/python"
-uvpip() { uv pip install --python "${VPY}" "$@"; }
-
-# torch first, from the cu128 index (A100 = sm80, cu128 wheels cover it)
-uvpip torch==2.11.0 torchvision --index-url https://download.pytorch.org/whl/cu128
-
-uvpip \
-  "transformers==5.16.1" \
-  "trl==1.12.0" \
-  "peft==0.20.0" \
-  "accelerate==1.14.0" \
-  "datasets==4.8.5" \
-  "qwen-vl-utils==0.0.14" \
-  "wandb" \
-  "pillow" \
-  "pyyaml" \
-  "hf_transfer" \
-  "huggingface_hub[cli]" \
-  "python-dotenv" \
-  "Levenshtein"
+# --frozen: install exactly what uv.lock says and fail rather than silently re-resolving.
+# Reproducibility is the whole point -- several behaviours this project depends on are
+# version-specific (see the comment in pyproject.toml).
+uv sync --frozen --no-dev "$@"
 
 echo
 echo "=== installed ==="
-uv pip list --python "${VPY}" | grep -iE "^(torch|transformers|trl|peft|accelerate|datasets|qwen|wandb|numpy) "
+uv pip list --python "${UV_PROJECT_ENVIRONMENT}/bin/python" \
+  | grep -iE "^(torch|torchvision|transformers|trl|peft|accelerate|datasets|numpy) "
 echo
-echo "venv: ${VENV}"
+echo "venv: ${UV_PROJECT_ENVIRONMENT}"
+echo "activate it for any command by sourcing scripts/env.sh"

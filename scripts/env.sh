@@ -28,7 +28,12 @@ if [ -f "${PROJ_ROOT}/.env" ]; then
 fi
 
 # --- venv ---
-VENV="${PROJ_SCRATCH}/venvs/vlm"
+# Built by scripts/setup_env.sh from the committed pyproject.toml + uv.lock. Kept on
+# $SCRATCH rather than the default .venv beside pyproject.toml, because this repo lives in
+# $HOME (10 GiB quota) and the environment is ~7 GB.
+export UV_PROJECT_ENVIRONMENT="${PROJ_SCRATCH}/venvs/vlm"
+export UV_CACHE_DIR="${PROJ_SCRATCH}/.uv-cache"
+VENV="${UV_PROJECT_ENVIRONMENT}"
 export PATH="${VENV}/bin:${PATH}"
 export PYTHONPATH="${PROJ_ROOT}:${PYTHONPATH:-}"
 
