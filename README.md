@@ -55,6 +55,7 @@ Training the released adapter took **14.4 minutes** on 1 node × 8 A100: 800 exa
 ## Layout
 
 ```
+pyproject.toml, uv.lock   pinned, reproducible environment (uv sync --frozen)
 configs/     accelerate FSDP + single-GPU yaml, training configs (smoke / 1-node / 2-node)
 slurm/       one sbatch per job shape: smoke_1gpu, train_1node, train_multinode, eval
 src/
@@ -69,8 +70,11 @@ md_files/    PROJECT brief, PHASE1/PHASE2 design notes, PROGRESS engineering log
 
 ## Reproduce
 
+Requires [uv](https://docs.astral.sh/uv/) and a Linux x86_64 machine with CUDA 12.8-capable
+GPUs (built and run on A100 40 GB).
+
 ```bash
-bash scripts/setup_env.sh          # venv on $SCRATCH (login node)
+bash scripts/setup_env.sh          # uv sync --frozen from uv.lock (login node, needs network)
 bash scripts/prefetch.sh           # model + dataset into $HF_HOME (login node, needs network)
 
 python scripts/inspect_batch.py --split validation --batch-size 2   # verify loss masking
@@ -113,7 +117,36 @@ The genuinely hard parts, each verified rather than assumed:
 
 `md_files/PROGRESS.md` is the full log, including the runs that failed and why.
 
-## Environment notes (cluster)
+## Environment
+
+`pyproject.toml` + `uv.lock` pin the environment exactly; `scripts/setup_env.sh` is a thin
+wrapper around `uv sync --frozen`.
+
+```
+torch 2.11.0+cu128   transformers 5.16.1   trl 1.12.0
+peft 0.20.0          accelerate 1.14.0     datasets 4.8.5     Python 3.12
+```
+
+Two deliberate choices in `pyproject.toml`:
+
+- **`torch`/`torchvision` come from the pinned `download.pytorch.org/whl/cu128` index**, not
+  PyPI, so a sync cannot silently install a build with a different CUDA runtime.
+- **`exclude-newer` freezes the resolution horizon** to the date the trained environment was
+  built. Without it, re-locking pulls newer transitive patch releases and the lock stops
+  reproducing the environment that produced the published adapter. Raise it deliberately
+  when upgrading, and re-run the smoke test afterwards.
+
+Direct dependency versions are pinned rather than floated on purpose: several behaviours
+this project relies on are version-specific (prompt-completion masking for vision datasets,
+`chunked_nll` rejecting a PEFT-wrapped `lm_head`, the vision collator's key set), so a
+resolver free to pick newer wheels would change training semantics silently.
+
+**The environment does not live in the repo.** `UV_PROJECT_ENVIRONMENT` puts it at
+`$SCRATCH/vlm_finetuning/venvs/vlm` (~7 GB) because `$HOME` on this cluster is a 10 GiB
+quota. `$SCRATCH` is purged storage — when the venv disappears, `scripts/setup_env.sh`
+rebuilds it from the lock. That is why the lock is committed.
+
+### Cluster-specific notes
 
 - `$HOME` is a 10 GiB quota — `scripts/env.sh` redirects HF, W&B, Triton and Inductor
   caches onto `$SCRATCH`. Source it before anything else.
