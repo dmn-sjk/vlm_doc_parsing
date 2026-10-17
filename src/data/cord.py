@@ -150,7 +150,7 @@ def build_datasets(
 
     Pipeline order is: format -> length-filter -> shuffle -> subsample. Filtering before
     subsampling means ``max_train_samples=8`` yields exactly 8 usable examples rather than
-    "8 minus however many were too long", which is what a smoke test needs.
+    "8 minus however many were too long", which is what a short debug run needs.
     """
     if processor is None:
         from .resolution import build_processor
@@ -207,7 +207,7 @@ def build_datasets(
 
         cap = caps[name]
         if cap is not None and cap < len(split):
-            # Shuffle before truncating so a smoke-test subset is a random sample rather
+            # Shuffle before truncating so a debug-run subset is a random sample rather
             # than whatever happens to sit at the front of the split.
             split = split.shuffle(seed=cfg.seed).select(range(cap))
             logger.info("%s: subsampled to %d examples (seed=%d)", name, cap, cfg.seed)

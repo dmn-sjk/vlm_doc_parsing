@@ -8,6 +8,8 @@ sbatch pair, so every knob lives here rather than in an edited-in-place script.
 from __future__ import annotations
 
 import copy
+import os
+import re
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -22,7 +24,7 @@ class DataConfig:
     eval_split: str = "validation"
     test_split: str = "test"
 
-    # Cap on the number of examples per split (None = all). Used by smoke tests.
+    # Cap on the number of examples per split (None = all). For short debug runs.
     max_train_samples: int | None = None
     max_eval_samples: int | None = None
 
@@ -73,7 +75,7 @@ class ModelConfig:
 
 @dataclass
 class TrainConfig:
-    output_dir: str = "${SCRATCH}/vlm_finetuning/runs/default"
+    output_dir: str = "${SITE_WORK_DIR}/runs/default"
     run_name: str = "qwen25vl-cord-lora"
 
     num_train_epochs: float = 3.0
@@ -168,6 +170,22 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
     if overrides:
         raw = _deep_update(raw, overrides)
     return _from_dict(Config, raw)
+
+
+def expand_path(path: str) -> str:
+    """Expand `${VAR}` in a config path, refusing to leave any unexpanded.
+
+    `os.path.expandvars` leaves an unset `${VAR}` in place, which silently creates a
+    directory literally named `${SITE_WORK_DIR}` under the cwd.
+    """
+    expanded = os.path.expandvars(path)
+    leftover = re.findall(r"\$\{?(\w+)", expanded)
+    if leftover:
+        raise ValueError(
+            f"{path!r}: environment variable(s) {', '.join(leftover)} not set; "
+            "`source scripts/env.sh` first"
+        )
+    return expanded
 
 
 def parse_override(item: str) -> dict[str, Any]:

@@ -1,7 +1,7 @@
 """Deliverable 2: load the base Qwen2.5-VL, attach (or merge) the LoRA adapter, feed it a
 document image, print structured JSON, and say whether that JSON actually parses.
 
-    python -m src.infer.predict --adapter $SCRATCH/vlm_finetuning/runs/.../final_adapter \
+    python -m src.infer.predict --adapter $SITE_WORK_DIR/runs/.../final_adapter \
         --image receipt.png --merge
 
 `--merge` calls `merge_and_unload()` (faster inference, one dense model, no adapter
