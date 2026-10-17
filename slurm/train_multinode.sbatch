@@ -35,7 +35,8 @@ if [ "${GPUS_PER_NODE}" -lt 1 ]; then
   exit 1
 fi
 # Split the task's cores across the ranks accelerate spawns on each node (floor 1).
-OMP_NUM_THREADS=$(( SLURM_CPUS_PER_TASK / GPUS_PER_NODE ))
+# SLURM_CPUS_PER_TASK is unset when run without -c (e.g. `srun --pty`), hence nproc.
+OMP_NUM_THREADS=$(( ${SLURM_CPUS_PER_TASK:-$(nproc)} / GPUS_PER_NODE ))
 export OMP_NUM_THREADS=$(( OMP_NUM_THREADS > 0 ? OMP_NUM_THREADS : 1 ))
 
 NNODES="${SLURM_NNODES}"
@@ -81,8 +82,10 @@ LAUNCHER="accelerate launch \
 # false, and TrainingArguments dies with "False is not a valid IntervalStrategy"
 # (observed in job 3108801). printf %q re-escapes each argument so it survives the extra
 # parse intact. The single-node script passes "$@" straight to accelerate and needs none
-# of this.
-FWD_ARGS=$(printf '%q ' "$@")
+# of this. With no args printf would still emit `''`, an empty argv element argparse
+# rejects, hence the guard.
+FWD_ARGS=""
+[ $# -eq 0 ] || FWD_ARGS=$(printf '%q ' "$@")
 
 srun --ntasks="${NNODES}" --ntasks-per-node=1 \
   bash -c "${LAUNCHER} -m src.train.train_sft --config ${TRAIN_CFG} ${FWD_ARGS}"
