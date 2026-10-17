@@ -1,9 +1,10 @@
 #!/bin/bash
 # Evaluation: 1 GPU, generate JSON for a held-out split and score it.
 # Usage: sbatch slurm/eval.sbatch <adapter_dir> [extra args for src.eval.evaluate]
+# Account/partition are deliberately not set here: scripts/submit.sh passes them from the
+# site profile, or pass `sbatch -A <acct> -p <part>` / set SBATCH_ACCOUNT, SBATCH_PARTITION
+# (precedence per `man sbatch`: CLI > SBATCH_* env > #SBATCH).
 #SBATCH --job-name=vlm-eval
-#SBATCH --account=<account>
-#SBATCH --partition=gpu-a100
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:1
@@ -15,8 +16,10 @@
 
 set -euo pipefail
 
-PROJ_ROOT="${PROJ_ROOT:-$HOME/vlm_finetuning}"
+# Inside a job $0 is a copy in SLURM's spool dir, so the repo is found via the submit dir.
+PROJ_ROOT="${PROJ_ROOT:-${SLURM_SUBMIT_DIR:?}}"
 cd "$PROJ_ROOT"
+[ -f pyproject.toml ] || { echo "error: ${PROJ_ROOT} is not the repo root; submit from the repository root" >&2; exit 1; }
 # shellcheck disable=SC1091
 source scripts/env.sh
 
@@ -24,7 +27,7 @@ export HF_HUB_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 export WANDB_PROJECT=qwen25vl-cord-json
 export WANDB_MODE=disabled
-export OMP_NUM_THREADS=8
+export OMP_NUM_THREADS=8         # one process; matches the value the published eval used
 
 # Pass the literal string "base" to score the un-finetuned checkpoint. A fine-tuned score
 # in isolation is uninterpretable -- the baseline is what turns it into a claim.
