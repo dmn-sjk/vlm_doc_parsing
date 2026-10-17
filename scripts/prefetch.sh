@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pre-download model + dataset into the shared HF cache on $SCRATCH.
+# Pre-download model + dataset into $HF_HOME (set by scripts/env.sh / the site profile).
 # MUST run on a login node: compute nodes have no reliable outbound internet,
 # so training runs with HF_HUB_OFFLINE=1 / HF_DATASETS_OFFLINE=1.
 set -euo pipefail
