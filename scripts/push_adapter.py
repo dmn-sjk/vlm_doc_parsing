@@ -1,7 +1,7 @@
 """Push the trained LoRA adapter to the Hugging Face Hub, with model_card/model_card.md as its README.
 
     source scripts/env.sh
-    python scripts/push_adapter.py --adapter $SCRATCH/vlm_finetuning/runs/.../final_adapter --dry-run
+    python scripts/push_adapter.py --adapter $SITE_WORK_DIR/runs/.../final_adapter --dry-run
     python scripts/push_adapter.py --adapter ...                       # the real push
 
 The model card is the hand-written `model_card/model_card.md` in this repo, uploaded as-is

@@ -45,7 +45,7 @@ model:
     modules_to_save: []  # must stay empty: lm_head in here breaks loss_type=chunked_nll
 
 train:
-  output_dir: ${SCRATCH}/vlm_finetuning/runs/cord-lora-1n8g
+  output_dir: ${SITE_WORK_DIR}/runs/cord-lora-1n8g
   run_name: qwen25vl-cord-lora-1n8g
 
   # 8 ranks x 2 per device x 2 accumulation = global batch 32 -- identical optimisation

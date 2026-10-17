@@ -4,7 +4,7 @@ Run it through `accelerate launch` (see `configs/accelerate_*.yaml` and `slurm/*
 never directly on a login node.
 
     accelerate launch --config_file configs/accelerate_single.yaml \
-        -m src.train.train_sft --config configs/sft_smoke.yaml \
+        -m src.train.train_sft --config configs/sft_1node.yaml \
         --set train.max_steps=2
 
 Everything that defines an experiment lives in the YAML (see `src/config.py`); `--set`
@@ -35,7 +35,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from accelerate import PartialState  # noqa: E402
-from src.config import Config, load_config, parse_override  # noqa: E402
+from src.config import Config, expand_path, load_config, parse_override  # noqa: E402
 
 logger = logging.getLogger("train_sft")
 
@@ -440,7 +440,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.no_length_grouping:
         cfg.data.group_by_length = False
 
-    output_dir = os.path.expandvars(cfg.train.output_dir)
+    output_dir = expand_path(cfg.train.output_dir)
     resolved = dataclasses.asdict(cfg)
     resolved["_provenance"] = {
         "config_file": str(Path(args.config).resolve()),

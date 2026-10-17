@@ -15,7 +15,7 @@ report three independent numbers:
                         so it is the only one of the three that is defined for every sample.
 
     python -m src.eval.evaluate --config configs/sft_multinode.yaml \
-        --adapter $SCRATCH/vlm_finetuning/runs/.../final_adapter --split test
+        --adapter $SITE_WORK_DIR/runs/.../final_adapter --split test
 """
 
 from __future__ import annotations
