@@ -46,11 +46,16 @@ nvidia-smi --query-gpu=index,name,memory.total --format=csv
 
 # Derive the rank count from what SLURM actually granted rather than hardcoding 8, so the
 # same script works for a reduced-GPU debug allocation (--gres=gpu:2) without editing it.
-NPROC="${SLURM_GPUS_ON_NODE:-$(nvidia-smi -L | wc -l)}"
+NPROC="${SLURM_GPUS_ON_NODE:-$( { nvidia-smi -L 2>/dev/null || true; } | wc -l)}"
+if [ "${NPROC}" -lt 1 ]; then
+  echo "error: cannot determine GPU count (SLURM_GPUS_ON_NODE unset, nvidia-smi saw none)" >&2
+  exit 1
+fi
 echo "launching ${NPROC} ranks"
 
-# Split the task's cores across the ranks (floor 1).
-OMP_NUM_THREADS=$(( SLURM_CPUS_PER_TASK / NPROC ))
+# Split the task's cores across the ranks (floor 1). SLURM_CPUS_PER_TASK is unset when run
+# without -c (e.g. `srun --pty`), hence nproc.
+OMP_NUM_THREADS=$(( ${SLURM_CPUS_PER_TASK:-$(nproc)} / NPROC ))
 export OMP_NUM_THREADS=$(( OMP_NUM_THREADS > 0 ? OMP_NUM_THREADS : 1 ))
 
 accelerate launch \

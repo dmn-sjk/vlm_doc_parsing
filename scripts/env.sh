@@ -2,9 +2,13 @@
 # Shared environment for every entrypoint (login-node scripts and sbatch jobs alike).
 # Source this; do not execute it.
 #
-# Precedence: your environment > site profile > the defaults below. Nothing here overwrites
-# a variable that is already set to a non-empty value (an empty one counts as unset, so
-# `VAR= cmd` cannot clear a profile value). Works with no profile and no $SCRATCH.
+# Precedence: your environment > site profile > the defaults below. No path or cache
+# default overwrites a variable that is already set to a non-empty value (an empty one
+# counts as unset, so `VAR= cmd` cannot clear a profile value). Works with no profile and
+# no $SCRATCH.
+
+# Executed rather than sourced, the `return`s below would not stop it.
+(return 0 2>/dev/null) || { echo "error: source scripts/env.sh, do not run it" >&2; exit 1; }
 
 # Derived from this file's location rather than hardcoded. sbatch scripts set PROJ_ROOT
 # themselves (from SLURM_SUBMIT_DIR) before sourcing; either way it is the repo root.
