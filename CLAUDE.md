@@ -17,40 +17,42 @@ artifact, not scaffolding — keep `slurm/` and `configs/` readable and committe
 
 ## Repository layout
 
-The repo is currently near-empty (only `md_files/PROJECT.md`). When creating files, follow
-this layout so the config/orchestration story stays legible:
+When creating files, follow this layout so the config/orchestration story stays legible:
 
 ```
 configs/          # accelerate FSDP yaml, training yaml/json configs
+  site/           # site profiles: cluster.env (reference), example.env (template)
 slurm/            # sbatch scripts (one per job shape: single-node, multi-node, eval)
 src/
   data/           # dataset loading, chat-template formatting, collators
   train/          # SFTTrainer entrypoint
   infer/          # load base + merge LoRA -> JSON out
-scripts/          # one-off utilities (dataset stats, resolution histograms)
+scripts/          # env.sh, submit.sh, setup/prefetch, one-off utilities
 md_files/         # project brief and design notes
 ```
 
-## Environment (A100 cluster)
+## Environment (any SLURM cluster or GPU workstation)
 
-- Nodes are **8x A100 per node**. Relevant partitions: `gpu-a100` (2-day limit),
-  `gpu-short` (1 h, use for smoke tests), `8k3-gpu` (14-day limit).
-- Login-node Python is ancient (3.8). **Never** rely on it — always `module load` a modern
-  toolchain or activate the project venv/conda env. Check what's actually available with
-  `module avail` rather than hardcoding a version you remember.
-- Storage: `$SCRATCH` = `/path/to/scratch` (fast, purged — checkpoints,
-  datasets, HF cache), `$GROUP_STORAGE` (durable, group-shared). Home is small; do not
-  let `HF_HOME`/`HF_DATASETS_CACHE`/`WANDB_DIR` default into it.
-- **Never run training on a login node.** Use `sbatch`, or `srun --pty` for interactive
-  debugging. Long-running commands issued by Claude must go through SLURM.
+- Site-specific values (account, partition, storage roots, NCCL interfaces, workarounds)
+  live in a **site profile**, `configs/site/*.env`, loaded by `scripts/env.sh`; notes about
+  the machine this checkout runs on live in `CLAUDE.local.md`. Committed code, configs and
+  sbatch scripts stay site-free: a value that differs between machines goes in the profile.
+- Run Python from the project venv (`source scripts/env.sh`), never the system interpreter.
+- Keep caches off small home dirs: everything large goes under `$SITE_WORK_DIR`, and the
+  profile moves `SITE_WORK_DIR` / `UV_PROJECT_ENVIRONMENT` when the repo sits on a quota.
+- **Never run training on a login node.** Submit with `scripts/submit.sh`, or `srun --pty`
+  for interactive debugging. Long-running commands issued by Claude must go through SLURM.
 - Compute nodes may have no outbound internet. Pre-download model weights and datasets on
-  the login node, then run with `HF_HUB_OFFLINE=1` / `HF_DATASETS_OFFLINE=1`.
+  the login node (`scripts/prefetch.sh`), then run with `HF_HUB_OFFLINE=1` /
+  `HF_DATASETS_OFFLINE=1`.
 
 ## Working conventions
 
-- **Smoke test before scale.** Any change to data pipeline or trainer config gets a single-
-  GPU, few-step run (`max_steps=5`, tiny subset) on `gpu-short` before a multi-node job is
-  submitted. Multi-node OOMs 40 minutes into a queue wait are the expensive failure mode.
+- **Short run before scale.** Any change to data pipeline, trainer config or pinned
+  dependencies gets a 5-step single-node run
+  (`scripts/submit.sh --time=00:15:00 train1n --set train.max_steps=5`) before a multi-node
+  job is submitted. Multi-node OOMs 40 minutes into a queue wait are the expensive failure
+  mode.
 - **Don't guess library APIs.** TRL, PEFT, and Accelerate change fast and the VLM paths in
   `SFTTrainer` especially so. Check the installed version (`pip show trl transformers`) and
   read the local source in site-packages rather than recalling an older signature.
@@ -82,7 +84,7 @@ md_files/         # project brief and design notes
 
 ## Checks before saying something works
 
-- Training change: smoke run completes and loss decreases over the first steps.
+- Training change: the 5-step short run completes and loss decreases over those steps.
 - Data change: decode and eyeball a formatted sample (image placeholder count, chat
   template, masked label span).
 - Inference change: run the script end-to-end on a real document and `json.loads()` the

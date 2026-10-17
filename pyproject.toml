@@ -54,7 +54,7 @@ environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 # Freeze the resolution horizon to the date the trained environment was built
 # (2026-08-29). Without it, re-locking picks up newer patch releases of transitive deps and
 # the lock no longer reproduces the environment that produced the published adapter.
-# Raise this date deliberately when you intend to upgrade, and re-run the smoke test.
+# Raise this date deliberately when you intend to upgrade, and re-run the 5-step short run.
 exclude-newer = "2026-08-30T00:00:00Z"
 
 [tool.ruff]

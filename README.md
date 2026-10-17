@@ -56,15 +56,16 @@ Training the released adapter took **14.4 minutes** on 1 node × 8 A100: 800 exa
 
 ```
 pyproject.toml, uv.lock   pinned, reproducible environment (uv sync --frozen)
-configs/     accelerate FSDP + single-GPU yaml, training configs (smoke / 1-node / 2-node)
-slurm/       one sbatch per job shape: smoke_1gpu, train_1node, train_multinode, eval
+configs/     accelerate FSDP + single-GPU yaml, training configs (1-node / 2-node)
+  site/      site profiles: cluster.env (the published run), example.env (template)
+slurm/       one sbatch per job shape: train_1node, train_multinode, eval
 src/
   config.py  dataclass+YAML contract shared by the data and training halves
   data/      CORD loading, JSON schema, resolution capping, length grouping
   train/     SFTTrainer entrypoint (LoRA, FSDP-safe adapter save)
   infer/     base + adapter -> JSON
   eval/      parse-rate and field-F1 scoring
-scripts/     env.sh, setup_env.sh, prefetch.sh, dataset_stats.py, inspect_batch.py, push_adapter.py
+scripts/     env.sh, submit.sh, setup_env.sh, prefetch.sh, dataset_stats.py, inspect_batch.py, push_adapter.py
 model_card/  model_card.md, uploaded verbatim as the Hub README by push_adapter.py
 md_files/    PROJECT brief, PHASE1/PHASE2 design notes, PROGRESS engineering log
 ```
@@ -75,17 +76,44 @@ Requires [uv](https://docs.astral.sh/uv/) and a Linux x86_64 machine with CUDA 1
 GPUs (built and run on A100 40 GB).
 
 ```bash
+cp configs/site/example.env site.env  # set account/partition/storage (see below)
 bash scripts/setup_env.sh          # uv sync --frozen from uv.lock (login node, needs network)
 bash scripts/prefetch.sh           # model + dataset into $HF_HOME (login node, needs network)
 
+source scripts/env.sh
 python scripts/inspect_batch.py --split validation --batch-size 2   # verify loss masking
-sbatch slurm/smoke_1gpu.sbatch                                      # 5 steps, ~1 min
-sbatch slurm/train_1node.sbatch                                     # the real run, ~15 min
-sbatch slurm/eval.sbatch <adapter_dir> --split test                 # `base` scores the baseline
+scripts/submit.sh --time=00:15:00 train1n --set train.max_steps=5   # short run, check loss falls
+scripts/submit.sh train1n                                           # the real run, ~15 min
+scripts/submit.sh eval <adapter_dir> --split test                   # `base` scores the baseline
 ```
+
+`scripts/submit.sh` only adds `-A`/`-p` from the site profile; plain
+`sbatch -A <acct> -p <part> slurm/train_1node.sbatch` from the repo root works too.
 
 Every run is reproducible from a committed config + sbatch pair; the entrypoint is
 config-driven with `--set key.path=value` overrides and never edited in place.
+
+## Running on your cluster
+
+Everything that differs between machines lives in one small **site profile**; the
+configs and sbatch scripts are the same everywhere. `scripts/env.sh` loads
+`$SITE_ENV` (default: `site.env` in the repo root) and fills anything unset with the
+defaults below. Values already in your environment always win, so
+`SITE_PARTITION=debug scripts/submit.sh train1n` overrides one value for one command.
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `SITE_ACCOUNT` | SLURM account (`sbatch -A`) | none (cluster default) |
+| `SITE_PARTITION` | partition for `train1n`, `train2n`, `eval` | none (cluster default) |
+| `SITE_WORK_DIR` | root for runs, adapters and caches | `<repo>/.work` |
+| `HF_HOME` | Hugging Face cache | `$SITE_WORK_DIR/huggingface` |
+| `UV_PROJECT_ENVIRONMENT` | the uv venv (~7 GB) | `<repo>/.venv` |
+| `NCCL_SOCKET_IFNAME`, `NCCL_IB_HCA` | multi-node network interface / IB HCA | unset (NCCL auto-detects) |
+
+GPUs per node come from the allocation. The job shapes (`--gres=gpu:8`, memory, wall time)
+are part of the experiment and stay as committed. Hyperparameters assume **A100 40 GB**;
+on smaller GPUs, lower `data.max_pixels` or the per-device batch with `--set`.
+`configs/site/cluster.env` is a complete worked profile.
 
 ## Engineering notes
 
@@ -135,24 +163,29 @@ Two deliberate choices in `pyproject.toml`:
 - **`exclude-newer` freezes the resolution horizon** to the date the trained environment was
   built. Without it, re-locking pulls newer transitive patch releases and the lock stops
   reproducing the environment that produced the published adapter. Raise it deliberately
-  when upgrading, and re-run the smoke test afterwards.
+  when upgrading, and re-run the 5-step short run afterwards.
 
 Direct dependency versions are pinned rather than floated on purpose: several behaviours
 this project relies on are version-specific (prompt-completion masking for vision datasets,
 `chunked_nll` rejecting a PEFT-wrapped `lm_head`, the vision collator's key set), so a
 resolver free to pick newer wheels would change training semantics silently.
 
-**The environment does not live in the repo.** `UV_PROJECT_ENVIRONMENT` puts it at
-`$SCRATCH/vlm_finetuning/venvs/vlm` (~7 GB) because `$HOME` on this cluster is a 10 GiB
-quota. `$SCRATCH` is purged storage — when the venv disappears, `scripts/setup_env.sh`
-rebuilds it from the lock. That is why the lock is committed.
+**The environment is rebuilt from the lock, not kept.** It lives wherever
+`UV_PROJECT_ENVIRONMENT` points (default `.venv`, ~7 GB). The cluster puts it on purged scratch
+storage because `$HOME` there is a 10 GiB quota; when it disappears,
+`scripts/setup_env.sh` rebuilds it from `uv.lock`. That is why the lock is committed.
 
-### Cluster-specific notes
+### Worked example: reference cluster
 
-- `$HOME` is a 10 GiB quota — `scripts/env.sh` redirects HF, W&B, Triton and Inductor
-  caches onto `$SCRATCH`. Source it before anything else.
+The published adapter was trained on the cluster (8× A100 40 GB per node) with
+`configs/site/cluster.env` (`ln -s configs/site/cluster.env site.env`). What that profile
+handles and why:
+
+- `$HOME` is a 10 GiB quota, so `SITE_WORK_DIR`, `HF_HOME` and the venv go onto `$SCRATCH`.
 - The Xet transfer backend is OOM-killed by the login-node cgroup mid-download
-  (exit 137); `HF_HUB_DISABLE_XET=1` is set for this reason.
-- `gpu-short` caps at **1 GPU, 1 job per user** — usable for single-GPU smoke tests only,
-  not multi-GPU validation.
+  (exit 137); the profile sets `HF_HUB_DISABLE_XET=1`.
+- NCCL is pinned to `ib0` / `mlx5_0`; without the interface NCCL can pick a management
+  NIC and the two nodes never rendezvous.
+- `gpu-short` caps at **1 GPU, 1 job per user**, so it cannot validate multi-GPU runs;
+  all jobs use `gpu-a100`.
 - Secrets come from a gitignored `.env` (see `.env.example`) or `~/.netrc`, never from code.
