@@ -29,7 +29,7 @@ export WANDB_PROJECT=qwen25vl-cord-json   # set here, never in code (credentials
 # Read off the allocation, not written down. SLURM_GPUS_ON_NODE is not exported to the
 # batch step by every Slurm version/config, hence the fallback (nodes are homogeneous, so
 # the batch host's count holds for all of them).
-GPUS_PER_NODE="${SLURM_GPUS_ON_NODE:-$(nvidia-smi -L 2>/dev/null | wc -l)}"
+GPUS_PER_NODE="${SLURM_GPUS_ON_NODE:-$( { nvidia-smi -L 2>/dev/null || true; } | wc -l)}"
 if [ "${GPUS_PER_NODE}" -lt 1 ]; then
   echo "error: cannot determine GPUs per node (SLURM_GPUS_ON_NODE unset, nvidia-smi saw none)" >&2
   exit 1
