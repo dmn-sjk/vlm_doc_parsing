@@ -49,10 +49,10 @@ md_files/         # project brief and design notes
 ## Working conventions
 
 - **Short run before scale.** Any change to data pipeline, trainer config or pinned
-  dependencies gets a 5-step single-node run
-  (`scripts/submit.sh --time=00:15:00 train1n --set train.max_steps=5`) before a multi-node
-  job is submitted. Multi-node OOMs 40 minutes into a queue wait are the expensive failure
-  mode.
+  dependencies gets a 5-step single-node run before a multi-node job is submitted.
+  Multi-node OOMs 40 minutes into a queue wait are the expensive failure mode. A short run
+  gets its own `output_dir` and no W&B, so it never overwrites the published adapter:
+  `scripts/submit.sh --time=00:15:00 train1n --set train.max_steps=5 --set train.eval_steps=5 --set 'train.output_dir=${SITE_WORK_DIR}/runs/short' --set train.report_to=none`
 - **Don't guess library APIs.** TRL, PEFT, and Accelerate change fast and the VLM paths in
   `SFTTrainer` especially so. Check the installed version (`pip show trl transformers`) and
   read the local source in site-packages rather than recalling an older signature.

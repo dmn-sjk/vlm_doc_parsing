@@ -11,7 +11,9 @@ the site, apart from one `${VAR}` in `output_dir`.
 ## Consequences
 
 - Precedence is environment > profile > `env.sh` defaults. A profile only fills gaps, so a
-  one-off override is an environment variable, never an edit.
+  one-off override is an environment variable, never an edit. Only non-empty values
+  override: `:=` treats an empty variable as unset, so a profile value cannot be cleared
+  from the environment.
 - Account and partition are kept out of `#SBATCH` lines and passed by `scripts/submit.sh`.
   Project variables use the `SITE_` prefix; `SLURM_*` names would leak into the `srun`
   inside the multi-node job.

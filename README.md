@@ -82,13 +82,16 @@ bash scripts/prefetch.sh           # model + dataset into $HF_HOME (login node, 
 
 source scripts/env.sh
 python scripts/inspect_batch.py --split validation --batch-size 2   # verify loss masking
-scripts/submit.sh --time=00:15:00 train1n --set train.max_steps=5   # short run, check loss falls
-scripts/submit.sh train1n                                           # the real run, ~15 min
-scripts/submit.sh eval <adapter_dir> --split test                   # `base` scores the baseline
+# short run, check loss falls; own output_dir and no W&B so the real run's adapter is untouched
+scripts/submit.sh --time=00:15:00 train1n --set train.max_steps=5 --set train.eval_steps=5 \
+  --set 'train.output_dir=${SITE_WORK_DIR}/runs/short' --set train.report_to=none
+scripts/submit.sh train1n                          # the real run, ~15 min
+scripts/submit.sh eval <adapter_dir> --split test  # `base` scores the baseline
 ```
 
 `scripts/submit.sh` only adds `-A`/`-p` from the site profile; plain
-`sbatch -A <acct> -p <part> slurm/train_1node.sbatch` from the repo root works too.
+`mkdir -p logs; sbatch -A <acct> -p <part> slurm/train_1node.sbatch` from the repo root
+works too.
 
 Every run is reproducible from a committed config + sbatch pair; the entrypoint is
 config-driven with `--set key.path=value` overrides and never edited in place.
@@ -171,9 +174,9 @@ this project relies on are version-specific (prompt-completion masking for visio
 resolver free to pick newer wheels would change training semantics silently.
 
 **The environment is rebuilt from the lock, not kept.** It lives wherever
-`UV_PROJECT_ENVIRONMENT` points (default `.venv`, ~7 GB). The cluster puts it on purged scratch
-storage because `$HOME` there is a 10 GiB quota; when it disappears,
-`scripts/setup_env.sh` rebuilds it from `uv.lock`. That is why the lock is committed.
+`UV_PROJECT_ENVIRONMENT` points (default `.venv`, ~7 GB). A profile may put it on purged
+scratch storage; when it disappears, `scripts/setup_env.sh` rebuilds it from `uv.lock`.
+That is why the lock is committed.
 
 ### Worked example: reference cluster
 
@@ -181,7 +184,8 @@ The published adapter was trained on the cluster (8× A100 40 GB per node) with
 `configs/site/cluster.env` (`ln -s configs/site/cluster.env site.env`). What that profile
 handles and why:
 
-- `$HOME` is a 10 GiB quota, so `SITE_WORK_DIR`, `HF_HOME` and the venv go onto `$SCRATCH`.
+- `$HOME` is a 10 GiB quota, so `SITE_WORK_DIR`, `HF_HOME` and the venv go onto `$SCRATCH`
+  (purged; `scripts/setup_env.sh` rebuilds the venv from `uv.lock`).
 - The Xet transfer backend is OOM-killed by the login-node cgroup mid-download
   (exit 137); the profile sets `HF_HUB_DISABLE_XET=1`.
 - NCCL is pinned to `ib0` / `mlx5_0`; without the interface NCCL can pick a management

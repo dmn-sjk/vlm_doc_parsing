@@ -5,7 +5,8 @@ never directly on a login node.
 
     accelerate launch --config_file configs/accelerate_single.yaml \
         -m src.train.train_sft --config configs/sft_1node.yaml \
-        --set train.max_steps=2
+        --set train.max_steps=2 --set 'train.output_dir=${SITE_WORK_DIR}/runs/short' \
+        --set train.report_to=none
 
 Everything that defines an experiment lives in the YAML (see `src/config.py`); `--set`
 applies dotted overrides on top so a committed config is never edited in place.

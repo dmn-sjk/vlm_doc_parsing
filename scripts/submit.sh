@@ -5,16 +5,20 @@
 #
 #   scripts/submit.sh train1n
 #   scripts/submit.sh --test-only train2n
-#   scripts/submit.sh --time=00:25:00 train2n --set train.max_steps=5
+#   scripts/submit.sh --time=00:25:00 train2n --set train.max_steps=5 --set train.eval_steps=5 \
+#     --set 'train.output_dir=${SITE_WORK_DIR}/runs/short-2n' --set train.report_to=none
 #   scripts/submit.sh eval <adapter_dir> --split test
 #
 # Options before the job name go to sbatch; they must be bare flags or `--opt=value`
 # (`--time 00:10:00` with a space is not supported). Everything after the job name goes to
-# the sbatch script. Plain `sbatch -A <acct> -p <part> slurm/<file>.sbatch` from the repo
-# root works too; this wrapper only saves typing the site's account and partition.
+# the sbatch script. Short runs override output_dir and report_to so they never overwrite a
+# real run's adapter or log to its W&B project. Plain
+# `mkdir -p logs; sbatch -A <acct> -p <part> slurm/<file>.sbatch` from the repo root works
+# too; this wrapper only saves typing the site's account and partition.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# readlink -f: run through a symlink, the repo is where the real file lives.
+REPO_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 usage() {
   awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${REPO_ROOT}/scripts/submit.sh"
   exit "${1:-0}"
@@ -47,7 +51,7 @@ esac
 # login shell happens to hold.
 site=$(
   # shellcheck disable=SC1091
-  source scripts/env.sh
+  source scripts/env.sh || exit 1
   printf '%s\n%s\n' "${SITE_ACCOUNT:-}" "${SITE_PARTITION:-}"
 )
 # `$(...)` strips trailing newlines, so an empty value can leave read at EOF (status 1).

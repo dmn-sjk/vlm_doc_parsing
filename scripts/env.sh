@@ -3,18 +3,34 @@
 # Source this; do not execute it.
 #
 # Precedence: your environment > site profile > the defaults below. Nothing here overwrites
-# a variable that is already set. Works with no profile and no $SCRATCH (plain workstation).
+# a variable that is already set to a non-empty value (an empty one counts as unset, so
+# `VAR= cmd` cannot clear a profile value). Works with no profile and no $SCRATCH.
 
 # Derived from this file's location rather than hardcoded. sbatch scripts set PROJ_ROOT
 # themselves (from SLURM_SUBMIT_DIR) before sourcing; either way it is the repo root.
 PROJ_ROOT="${PROJ_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 # --- site profile: account, partitions, storage, NCCL interfaces (see configs/site/) ---
-SITE_ENV="${SITE_ENV:-${PROJ_ROOT}/site.env}"
+# An explicit SITE_ENV must exist: silently falling back to the defaults would put ~16 GB
+# of caches under the repo, which on a quota'd home fills it. Relative paths are taken from
+# the repo root, so the same value works from any cwd and inside jobs.
+if [ -n "${SITE_ENV:-}" ]; then
+  case "${SITE_ENV}" in /*) ;; *) SITE_ENV="${PROJ_ROOT}/${SITE_ENV}" ;; esac
+  if [ ! -f "${SITE_ENV}" ]; then
+    echo "error: SITE_ENV=${SITE_ENV} does not exist" >&2
+    return 1
+  fi
+else
+  SITE_ENV="${PROJ_ROOT}/site.env"
+fi
 if [ -f "${SITE_ENV}" ]; then
   set -a
   # shellcheck disable=SC1090
-  . "${SITE_ENV}"
+  if ! . "${SITE_ENV}"; then
+    set +a
+    echo "error: site profile ${SITE_ENV} failed to load" >&2
+    return 1
+  fi
   set +a
 fi
 

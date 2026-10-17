@@ -176,7 +176,8 @@ def expand_path(path: str) -> str:
     """Expand `${VAR}` in a config path, refusing to leave any unexpanded.
 
     `os.path.expandvars` leaves an unset `${VAR}` in place, which silently creates a
-    directory literally named `${SITE_WORK_DIR}` under the cwd.
+    directory literally named `${SITE_WORK_DIR}` under the cwd. Only `$VAR` / `${VAR}`
+    are supported; shell forms such as `${VAR:-default}` are rejected.
     """
     expanded = os.path.expandvars(path)
     leftover = re.findall(r"\$\{?(\w+)", expanded)
