@@ -1,8 +1,9 @@
 #!/bin/bash
 # Production run: 2 nodes x 8 A100 = 16 ranks, FSDP FULL_SHARD + LoRA on CORD-v2.
+# Account/partition are deliberately not set here: scripts/submit.sh passes them from the
+# site profile, or pass `sbatch -A <acct> -p <part>` / set SBATCH_ACCOUNT, SBATCH_PARTITION
+# (precedence per `man sbatch`: CLI > SBATCH_* env > #SBATCH).
 #SBATCH --job-name=vlm-cord-2n8g
-#SBATCH --account=<account>
-#SBATCH --partition=gpu-a100      # 2-day cap; the production partition
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1              # ONE task per node: accelerate spawns the 8 ranks
 #SBATCH --gres=gpu:8
@@ -14,17 +15,29 @@
 
 set -euo pipefail
 
-PROJ_ROOT="${PROJ_ROOT:-$HOME/vlm_finetuning}"
+# Inside a job $0 is a copy in SLURM's spool dir, so the repo is found via the submit dir.
+PROJ_ROOT="${PROJ_ROOT:-${SLURM_SUBMIT_DIR:?}}"
 cd "$PROJ_ROOT"
+[ -f pyproject.toml ] || { echo "error: ${PROJ_ROOT} is not the repo root; submit from the repository root" >&2; exit 1; }
 # shellcheck disable=SC1091
 source scripts/env.sh
 
 export HF_HUB_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 export WANDB_PROJECT=qwen25vl-cord-json   # set here, never in code (credentials: ~/.netrc)
-export OMP_NUM_THREADS=8                  # 64 cores / 8 ranks per node
 
-GPUS_PER_NODE=8
+# Read off the allocation, not written down. SLURM_GPUS_ON_NODE is not exported to the
+# batch step by every Slurm version/config, hence the fallback (nodes are homogeneous, so
+# the batch host's count holds for all of them).
+GPUS_PER_NODE="${SLURM_GPUS_ON_NODE:-$(nvidia-smi -L 2>/dev/null | wc -l)}"
+if [ "${GPUS_PER_NODE}" -lt 1 ]; then
+  echo "error: cannot determine GPUs per node (SLURM_GPUS_ON_NODE unset, nvidia-smi saw none)" >&2
+  exit 1
+fi
+# Split the task's cores across the ranks accelerate spawns on each node (floor 1).
+OMP_NUM_THREADS=$(( SLURM_CPUS_PER_TASK / GPUS_PER_NODE ))
+export OMP_NUM_THREADS=$(( OMP_NUM_THREADS > 0 ? OMP_NUM_THREADS : 1 ))
+
 NNODES="${SLURM_NNODES}"
 NPROC=$(( NNODES * GPUS_PER_NODE ))
 
@@ -38,11 +51,9 @@ MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1)
 MASTER_PORT=$(( 20000 + SLURM_JOB_ID % 20000 ))
 export MASTER_ADDR MASTER_PORT
 
-# --- NCCL on the cluster (8x A100 per node, single Mellanox HCA) --------------------------
-# mlx5_0 / ib0 were read off the cluster, not assumed.
-export NCCL_SOCKET_IFNAME=ib0   # bootstrap over IPoIB; without this NCCL can pick `ext`
-                                # or `svc-eth` and the two nodes never find each other
-export NCCL_IB_HCA=mlx5_0       # the node's only InfiniBand HCA
+# --- NCCL ---------------------------------------------------------------------------
+# Interface/HCA selection (NCCL_SOCKET_IFNAME, NCCL_IB_HCA) is a site fact and comes from
+# the site profile via env.sh; left unset, NCCL auto-detects. See configs/site/cluster.env.
 export NCCL_IB_DISABLE=0        # force the IB verbs transport (not TCP over IPoIB)
 export NCCL_DEBUG=INFO          # so the log proves "NET/IB" was chosen, not "NET/Socket"
 export NCCL_DEBUG_SUBSYS=INIT,NET   # ... without the per-collective firehose
