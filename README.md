@@ -65,6 +65,7 @@ src/
   infer/     base + adapter -> JSON
   eval/      parse-rate and field-F1 scoring
 scripts/     env.sh, setup_env.sh, prefetch.sh, dataset_stats.py, inspect_batch.py, push_adapter.py
+model_card/  model_card.md, uploaded verbatim as the Hub README by push_adapter.py
 md_files/    PROJECT brief, PHASE1/PHASE2 design notes, PROGRESS engineering log
 ```
 
