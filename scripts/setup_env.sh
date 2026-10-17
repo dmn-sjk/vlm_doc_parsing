@@ -4,19 +4,19 @@
 # Run on a LOGIN NODE: compute nodes have no reliable outbound internet, and the venv is
 # ~7 GB of wheels.
 #
-# The environment is deliberately NOT the default `.venv` next to pyproject.toml -- this
-# repo lives in $HOME, which is a 10 GiB quota already ~95% full. UV_PROJECT_ENVIRONMENT
-# redirects it to $SCRATCH. Note $SCRATCH is purged storage: if the venv disappears, this
-# script rebuilds it byte-identically from uv.lock, which is the reason the lock is
-# committed.
+# The venv goes wherever UV_PROJECT_ENVIRONMENT points: uv's default `.venv` next to
+# pyproject.toml unless the site profile moves it (configs/site/cluster.env puts it on
+# purged scratch storage). If it disappears, this script rebuilds it byte-identically from
+# uv.lock, which is the reason the lock is committed.
 set -euo pipefail
 
-PROJ_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PROJ_SCRATCH="${SCRATCH:?SCRATCH not set}/vlm_finetuning"
+# shellcheck disable=SC1091
+source "$(dirname "$0")/env.sh"
 
-export UV_PROJECT_ENVIRONMENT="${PROJ_SCRATCH}/venvs/vlm"
-export UV_CACHE_DIR="${PROJ_SCRATCH}/.uv-cache"
-mkdir -p "${PROJ_SCRATCH}/venvs" "${UV_CACHE_DIR}"
+mkdir -p "$(dirname "${UV_PROJECT_ENVIRONMENT}")"
+if [ -n "${UV_CACHE_DIR:-}" ]; then
+  mkdir -p "${UV_CACHE_DIR}"
+fi
 
 command -v uv >/dev/null || { echo "uv not on PATH (expected ~/.local/bin/uv)"; exit 1; }
 

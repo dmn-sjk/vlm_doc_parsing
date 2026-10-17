@@ -17,3 +17,10 @@ outputs/
 checkpoints/
 *.log
 .ipynb_checkpoints/
+
+# site profile (per machine; committed examples live in configs/site/) and its work dir
+site.env
+.work/
+
+# per-checkout Claude Code instructions (machine-specific)
+CLAUDE.local.md
