@@ -22,19 +22,17 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+import Levenshtein
 
-from src.config import load_config  # noqa: E402
-from src.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION  # noqa: E402
-from src.infer.predict import (  # noqa: E402
+from src.config import load_config
+from src.data.cord import build_datasets
+from src.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION
+from src.infer.predict import (
     generate_json,
     load_model_and_processor,
     parse_json,
@@ -76,8 +74,6 @@ def canonical(obj: Any) -> str:
 
 
 def norm_edit_sim(a: str, b: str) -> float:
-    import Levenshtein
-
     if not a and not b:
         return 1.0
     return 1.0 - Levenshtein.distance(a, b) / max(len(a), len(b))
@@ -90,12 +86,7 @@ def gold_from_example(example: dict) -> Any:
     exactly scoring against what the model was taught -- no second normalisation path that
     could silently drift from Phase 1's.
     """
-    completion = example["completion"]
-    msg = completion[-1] if isinstance(completion, list) else completion
-    content = msg["content"] if isinstance(msg, dict) else msg
-    if isinstance(content, list):
-        content = "".join(b.get("text", "") for b in content if isinstance(b, dict))
-    return json.loads(content)
+    return json.loads(example["completion"][-1]["content"])
 
 
 # --------------------------------------------------------------------------------------
@@ -124,8 +115,6 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     cfg = load_config(args.config, args.overrides)
-
-    from src.data.cord import build_datasets  # Phase 1
 
     split = {"train": cfg.data.train_split, "validation": cfg.data.eval_split, "test": cfg.data.test_split}[args.split]
     ds = build_datasets(cfg.data)[split]

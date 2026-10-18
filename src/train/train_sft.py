@@ -29,21 +29,20 @@ from typing import Any
 
 import torch
 import yaml
+from accelerate import PartialState
+from peft import LoraConfig as PeftLoraConfig
+from safetensors.torch import load_file
+from torch.utils.data import SequentialSampler
+from transformers import Qwen2_5_VLForConditionalGeneration
+from transformers.trainer_pt_utils import LengthGroupedSampler
+from trl import SFTConfig, SFTTrainer
 
-# Make `python src/train/train_sft.py` work as well as `-m src.train.train_sft`.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
-from accelerate import PartialState  # noqa: E402
-from src.config import Config, expand_path, load_config  # noqa: E402
+from src.config import Config, expand_path, load_config
+from src.data.cord import build_datasets
+from src.data.grouping import estimate_lengths
+from src.data.resolution import build_processor
 
 logger = logging.getLogger("train_sft")
-
-# One Qwen2.5-VL visual token covers a 28x28 pixel block (14x14 ViT patches, merged 2x2),
-# so `pixels / 784` is the visual-token budget. Used for both the max_pixels arithmetic
-# and the fallback length estimator below.
-PIXELS_PER_VISUAL_TOKEN = 28 * 28
 
 
 # --------------------------------------------------------------------------------------
@@ -64,87 +63,12 @@ def build_parser() -> argparse.ArgumentParser:
         "e.g. --set train.learning_rate=2e-4 --set data.max_train_samples=16",
     )
     p.add_argument(
-        "--no-length-grouping",
-        action="store_true",
-        help="Disable length-grouped batching even if data.group_by_length is true.",
-    )
-    p.add_argument(
         "--dry-run",
         action="store_true",
         help="Resolve the config, build the model and the trainer, print the trainable "
         "parameter count, then exit without training.",
     )
     return p
-
-
-# --------------------------------------------------------------------------------------
-# Rank helpers
-# --------------------------------------------------------------------------------------
-
-
-def _rank() -> int:
-    return int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", 0)))
-
-
-def _world_size() -> int:
-    return int(os.environ.get("WORLD_SIZE", 1))
-
-
-def rank0_print(*a: Any) -> None:
-    if _rank() == 0:
-        print(*a, flush=True)
-
-
-# --------------------------------------------------------------------------------------
-# Phase 1 interface (src/data/*). Signatures verified against the landed modules:
-#   src.data.resolution.build_processor(cfg: DataConfig, model_id=None, **kwargs)
-#   src.data.cord.build_datasets(cfg: DataConfig, processor=None, model_id=None) -> DatasetDict
-#   src.data.grouping.estimate_lengths(ds, processor, *, min_pixels, max_pixels) -> list[int]
-# --------------------------------------------------------------------------------------
-
-
-def build_processor(cfg: Config):
-    """Qwen2_5_VLProcessor with the dynamic-resolution caps applied.
-
-    `min_pixels`/`max_pixels` are only honoured when passed as a *pair*
-    (image_processing_qwen2_vl.py:120-129); `build_processor` enforces that, which is why
-    we go through it rather than calling AutoProcessor here. The stock checkpoint ships
-    `max_pixels=12845056` -- 16384 visual tokens, an instant OOM.
-    """
-    from src.data.resolution import build_processor as _build
-
-    return _build(cfg.data, model_id=cfg.model.base_model)
-
-
-def build_datasets(cfg: Config, processor):
-    """`DatasetDict` with train/validation/test, each row {images, prompt, completion}.
-
-    The trainer's own processor is passed in so Phase 1's `max_length` filter measures the
-    same tokenisation the collator will produce, and so we do not load a second copy.
-    """
-    from src.data.cord import build_datasets as _build
-
-    return _build(cfg.data, processor=processor, model_id=cfg.model.base_model)
-
-
-def train_lengths(dataset, cfg: Config, processor) -> list[int]:
-    """Per-example length signal used to build length-grouped batches.
-
-    Exact, not heuristic: `estimate_lengths` tokenises the rendered prompt and completion
-    and expands each `<|image_pad|>` into its real visual-token count, without decoding a
-    single image (the `images` column is temporarily cast to `Image(decode=False)` so only
-    the header is read).
-    """
-    from src.data.grouping import estimate_lengths
-
-    return list(
-        estimate_lengths(
-            dataset,
-            processor,
-            min_pixels=cfg.data.min_pixels,
-            max_pixels=cfg.data.max_pixels,
-        )
-    )
 
 
 # --------------------------------------------------------------------------------------
@@ -164,8 +88,6 @@ VISION_TOWER_EXCLUDE_RE = r"model\.visual\..*"
 
 
 def load_model(cfg: Config):
-    from transformers import Qwen2_5_VLForConditionalGeneration
-
     dtype = _DTYPES[cfg.model.dtype]
     # transformers 5.x renamed `torch_dtype` -> `dtype`; the old name still works but logs a
     # deprecation warning (modeling_utils.py:1490, :4131).
@@ -184,7 +106,8 @@ def load_model(cfg: Config):
         for p in tower.parameters():
             p.requires_grad_(False)
             n += p.numel()
-        rank0_print(f"[model] froze vision tower ({VISION_TOWER_PATH}): {n / 1e6:.1f}M params")
+        if PartialState().is_main_process:
+            print(f"[model] froze vision tower ({VISION_TOWER_PATH}): {n / 1e6:.1f}M params", flush=True)
     return model
 
 
@@ -202,8 +125,6 @@ def build_peft_config(cfg: Config):
     2. `lm_head` must never be adapted: TRL refuses `loss_type="chunked_nll"` when the
        output embedding is a PEFT tuner layer (trl/trainer/sft_trainer.py:1333).
     """
-    from peft import LoraConfig as PeftLoraConfig
-
     lora = cfg.model.lora
     bad = [m for m in list(lora.target_modules) + list(lora.modules_to_save) if "lm_head" in m]
     if bad:
@@ -231,79 +152,69 @@ def build_peft_config(cfg: Config):
 # --------------------------------------------------------------------------------------
 
 
-def make_trainer_class():
-    """Subclass built lazily so importing this module does not require trl."""
-    from torch.utils.data import SequentialSampler
-    from transformers.trainer_pt_utils import LengthGroupedSampler
-    from trl import SFTTrainer
+class LengthGroupedVisionSFTTrainer(SFTTrainer):
+    """SFTTrainer with a length-grouped train sampler driven by explicit lengths.
 
-    class LengthGroupedVisionSFTTrainer(SFTTrainer):
-        """SFTTrainer with a length-grouped train sampler driven by explicit lengths.
+    `TrainingArguments.train_sampling_strategy="group_by_length"` reads the lengths out
+    of `args.length_column_name` on the dataset (transformers/trainer.py:1036-1044) --
+    but `Trainer._get_dataloader` strips the dataset to the signature columns *before*
+    handing it to the sampler factory (trainer.py:985 then :1003), and TRL's vision
+    signature columns are only ["messages","prompt","completion","image","images"]
+    (trl/trainer/sft_trainer.py:1683). A precomputed length column therefore cannot
+    survive, so we pass the lengths in from the outside instead.
 
-        `TrainingArguments.train_sampling_strategy="group_by_length"` reads the lengths out
-        of `args.length_column_name` on the dataset (transformers/trainer.py:1036-1044) --
-        but `Trainer._get_dataloader` strips the dataset to the signature columns *before*
-        handing it to the sampler factory (trainer.py:985 then :1003), and TRL's vision
-        signature columns are only ["messages","prompt","completion","image","images"]
-        (trl/trainer/sft_trainer.py:1683). A precomputed length column therefore cannot
-        survive, so we pass the lengths in from the outside instead.
+    Row order is stable: vision datasets take the `_skip_prepare_dataset` path
+    (sft_trainer.py:1270-1275), so `self.train_dataset` is exactly the dataset we were
+    handed, and `_remove_unused_columns` only drops columns. We still assert on length.
 
-        Row order is stable: vision datasets take the `_skip_prepare_dataset` path
-        (sft_trainer.py:1270-1275), so `self.train_dataset` is exactly the dataset we were
-        handed, and `_remove_unused_columns` only drops columns. We still assert on length.
+    The megabatch is `per_device_bs * grad_accum * world_size` rather than
+    transformers' `train_batch_size * grad_accum` (which is per-device under DDP/FSDP).
+    Grouping only helps if every rank in the *same* optimizer step draws from the same
+    length bucket -- otherwise the ranks still stall against each other at the
+    all-reduce, which is the actual failure mode in gotcha #2.
+    """
 
-        The megabatch is `per_device_bs * grad_accum * world_size` rather than
-        transformers' `train_batch_size * grad_accum` (which is per-device under DDP/FSDP).
-        Grouping only helps if every rank in the *same* optimizer step draws from the same
-        length bucket -- otherwise the ranks still stall against each other at the
-        all-reduce, which is the actual failure mode in gotcha #2.
-        """
+    def __init__(self, *args, train_lengths: list[int] | None = None, **kwargs):
+        self._train_lengths = train_lengths
+        super().__init__(*args, **kwargs)
 
-        def __init__(self, *args, train_lengths: list[int] | None = None, **kwargs):
-            self._train_lengths = train_lengths
-            super().__init__(*args, **kwargs)
-
-        def _get_train_sampler(self, train_dataset=None):
-            if train_dataset is None:
-                train_dataset = self.train_dataset
-            if self._train_lengths is None or self.args.train_sampling_strategy != "group_by_length":
-                return super()._get_train_sampler(train_dataset)
-            if len(self._train_lengths) != len(train_dataset):
-                raise ValueError(
-                    f"length signal has {len(self._train_lengths)} entries but the training "
-                    f"dataset has {len(train_dataset)}; refusing to mis-group batches."
-                )
-            megabatch = (
-                self.args.per_device_train_batch_size
-                * self.args.gradient_accumulation_steps
-                * max(1, self.args.world_size)
+    def _get_train_sampler(self, train_dataset=None):
+        if train_dataset is None:
+            train_dataset = self.train_dataset
+        if self._train_lengths is None or self.args.train_sampling_strategy != "group_by_length":
+            return super()._get_train_sampler(train_dataset)
+        if len(self._train_lengths) != len(train_dataset):
+            raise ValueError(
+                f"length signal has {len(self._train_lengths)} entries but the training "
+                f"dataset has {len(train_dataset)}; refusing to mis-group batches."
             )
-            seed = self.args.data_seed if self.args.data_seed is not None else self.args.seed
-            # Explicit generator: every rank iterates the *same* sampler and accelerate's
-            # BatchSamplerShard slices it, so the permutation must be identical everywhere.
-            return LengthGroupedSampler(
-                megabatch,
-                lengths=self._train_lengths,
-                generator=torch.Generator().manual_seed(seed),
-            )
+        megabatch = (
+            self.args.per_device_train_batch_size
+            * self.args.gradient_accumulation_steps
+            * max(1, self.args.world_size)
+        )
+        seed = self.args.data_seed if self.args.data_seed is not None else self.args.seed
+        # Explicit generator: every rank iterates the *same* sampler and accelerate's
+        # BatchSamplerShard slices it, so the permutation must be identical everywhere.
+        return LengthGroupedSampler(
+            megabatch,
+            lengths=self._train_lengths,
+            generator=torch.Generator().manual_seed(seed),
+        )
 
-        def _get_eval_sampler(self, eval_dataset):
-            # The inherited implementation branches on `train_sampling_strategy` too
-            # (trainer.py:1064) and would try to infer lengths from an "input_ids" key that
-            # a vision dataset does not have, raising in LengthGroupedSampler.__init__
-            # (trainer_pt_utils.py:540). Evaluation is small; plain sequential order is fine.
-            if eval_dataset is None:
-                return None
-            if self.args.world_size <= 1:
-                return SequentialSampler(eval_dataset)
+    def _get_eval_sampler(self, eval_dataset):
+        # The inherited implementation branches on `train_sampling_strategy` too
+        # (trainer.py:1064) and would try to infer lengths from an "input_ids" key that
+        # a vision dataset does not have, raising in LengthGroupedSampler.__init__
+        # (trainer_pt_utils.py:540). Evaluation is small; plain sequential order is fine.
+        if eval_dataset is None:
             return None
-
-    return LengthGroupedVisionSFTTrainer
+        if self.args.world_size <= 1:
+            return SequentialSampler(eval_dataset)
+        return None
 
 
 def build_sft_config(cfg: Config, output_dir: str):
-    from trl import SFTConfig
-
     t = cfg.train
     return SFTConfig(
         output_dir=output_dir,
@@ -391,8 +302,6 @@ def save_adapter(trainer, cfg: Config, output_dir: str, resolved: dict) -> None:
 
 def verify_adapter(path: str) -> dict:
     """Open the saved adapter and check it actually contains trained weights."""
-    from safetensors.torch import load_file
-
     p = Path(path) / "adapter_model.safetensors"
     report: dict[str, Any] = {"path": str(p), "exists": p.exists()}
     if not p.exists():
@@ -423,41 +332,44 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = build_parser().parse_args(argv)
     cfg = load_config(args.config, args.overrides)
-    if args.no_length_grouping:
-        cfg.data.group_by_length = False
-
     output_dir = expand_path(cfg.train.output_dir)
-    resolved = dataclasses.asdict(cfg)
-    resolved["_provenance"] = {
-        "config_file": str(Path(args.config).resolve()),
-        "overrides": list(args.overrides),
-        "output_dir": output_dir,
-        "world_size": _world_size(),
-        "argv": sys.argv,
-        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
-    }
-
-    rank0_print("=" * 78)
-    rank0_print("resolved config")
-    rank0_print("=" * 78)
-    rank0_print(yaml.safe_dump(resolved, sort_keys=False).rstrip())
-    rank0_print("=" * 78)
 
     # Build the training args *first* and touch `.device`: that constructs accelerate's
-    # PartialState and initialises torch.distributed. `from_pretrained` only takes the
+    # PartialState (with ddp_timeout, which a bare `PartialState()` here would drop) and
+    # initialises torch.distributed. `from_pretrained` only takes the
     # rank-0-reads-the-checkpoint path when `is_fsdp_enabled()` is true, and that helper
     # requires torch.distributed to already be initialised
     # (transformers/distributed/fsdp.py:41-47 -> modeling_utils.py:4790). Loading the
     # model before this point makes all 16 ranks read 16 GB of safetensors each.
     sft_args = build_sft_config(cfg, output_dir)
-    _ = sft_args.device
-    rank0_print(
-        f"[dist] world_size={_world_size()} device={sft_args.device} "
-        f"fsdp={os.environ.get('ACCELERATE_USE_FSDP', 'false')} "
-        f"cpu_ram_efficient_loading={os.environ.get('FSDP_CPU_RAM_EFFICIENT_LOADING', 'false')}"
-    )
+    device = sft_args.device
+    state = PartialState()
 
-    processor = build_processor(cfg)
+    resolved = dataclasses.asdict(cfg)
+    resolved["_provenance"] = {
+        "config_file": str(Path(args.config).resolve()),
+        "overrides": list(args.overrides),
+        "output_dir": output_dir,
+        "world_size": state.num_processes,
+        "argv": sys.argv,
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+    }
+
+    # Global rank 0 only: `state.print` would repeat these once per node.
+    if state.is_main_process:
+        print("=" * 78)
+        print("resolved config")
+        print("=" * 78)
+        print(yaml.safe_dump(resolved, sort_keys=False).rstrip())
+        print("=" * 78)
+        print(
+            f"[dist] world_size={state.num_processes} device={device} "
+            f"fsdp={os.environ.get('ACCELERATE_USE_FSDP', 'false')} "
+            f"cpu_ram_efficient_loading={os.environ.get('FSDP_CPU_RAM_EFFICIENT_LOADING', 'false')}",
+            flush=True,
+        )
+
+    processor = build_processor(cfg.data, model_id=cfg.model.base_model)
 
     # Every rank builds the dataset, and both `build_datasets` and `estimate_lengths` go
     # through `datasets.map`/`cast_column`, which write Arrow cache files derived from a
@@ -466,28 +378,36 @@ def main(argv: list[str] | None = None) -> int:
     #   FileNotFoundError: .../cache-1ca3ca1e8f18eeab.arrow
     # (observed in job 3108496). `main_process_first` lets rank 0 build and cache, then
     # releases the rest to hit the completed cache instead of regenerating it.
-    state = PartialState()
     with state.main_process_first():
-        ds = build_datasets(cfg, processor)
+        # The trainer's own processor, so the max_length filter measures the collator's
+        # tokenisation and no second copy is loaded.
+        ds = build_datasets(cfg.data, processor=processor, model_id=cfg.model.base_model)
         train_ds = ds[cfg.data.train_split]
         eval_ds = ds.get(cfg.data.eval_split) if cfg.train.eval_strategy != "no" else None
-        lengths = train_lengths(train_ds, cfg, processor) if cfg.data.group_by_length else None
-
-    rank0_print(f"[data] train={len(train_ds)}" + (f" eval={len(eval_ds)}" if eval_ds is not None else ""))
-
-    if lengths is not None:
-        rank0_print(
-            f"[data] length signal: min={min(lengths)} p50={sorted(lengths)[len(lengths) // 2]} "
-            f"max={max(lengths)}"
+        lengths = (
+            estimate_lengths(
+                train_ds,
+                processor,
+                min_pixels=cfg.data.min_pixels,
+                max_pixels=cfg.data.max_pixels,
+            )
+            if cfg.data.group_by_length
+            else None
         )
-    else:
-        sft_args.train_sampling_strategy = "random"
+
+    if state.is_main_process:
+        print(f"[data] train={len(train_ds)}" + (f" eval={len(eval_ds)}" if eval_ds is not None else ""))
+        if lengths is not None:
+            print(
+                f"[data] length signal: min={min(lengths)} p50={sorted(lengths)[len(lengths) // 2]} "
+                f"max={max(lengths)}",
+                flush=True,
+            )
 
     model = load_model(cfg)
     peft_config = build_peft_config(cfg)
 
-    trainer_cls = make_trainer_class()
-    trainer = trainer_cls(
+    trainer = LengthGroupedVisionSFTTrainer(
         model=model,
         args=sft_args,
         train_dataset=train_ds,
@@ -497,14 +417,15 @@ def main(argv: list[str] | None = None) -> int:
         train_lengths=lengths,
     )
 
-    if _rank() == 0:
+    if state.is_main_process:
         trainer.model.print_trainable_parameters()
         adapted = [n for n, _ in trainer.model.named_modules() if n.endswith(".lora_A")]
         in_vision = [n for n in adapted if ".visual." in n]
         print(f"[peft] adapted modules: {len(adapted)} (inside vision tower: {len(in_vision)})", flush=True)
 
     if args.dry_run:
-        rank0_print("[dry-run] trainer built successfully; exiting before train()")
+        if state.is_main_process:
+            print("[dry-run] trainer built successfully; exiting before train()", flush=True)
         return 0
 
     trainer.train()
@@ -518,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
         reserved_gib = torch.cuda.max_memory_reserved() / 1024**3
         total_gib = torch.cuda.get_device_properties(0).total_memory / 1024**3
         print(
-            f"[vram] rank={_rank()} peak_allocated={peak_gib:.2f}GiB "
+            f"[vram] rank={state.process_index} peak_allocated={peak_gib:.2f}GiB "
             f"peak_reserved={reserved_gib:.2f}GiB device_total={total_gib:.2f}GiB "
             f"headroom={total_gib - reserved_gib:.2f}GiB",
             flush=True,
@@ -526,7 +447,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if eval_ds is not None:
         metrics = trainer.evaluate()
-        rank0_print(f"[eval] {metrics}")
+        if state.is_main_process:
+            print(f"[eval] {metrics}", flush=True)
 
     save_adapter(trainer, cfg, output_dir, resolved)
     return 0

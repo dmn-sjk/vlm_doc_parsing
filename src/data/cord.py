@@ -45,6 +45,7 @@ from typing import Any
 from datasets import Dataset, DatasetDict, Features, Image, List, Value, load_dataset
 
 from .grouping import estimate_lengths
+from .resolution import FACTOR, build_processor
 from .schema import SYSTEM_PROMPT, USER_INSTRUCTION, target_json
 
 logger = logging.getLogger(__name__)
@@ -153,8 +154,6 @@ def build_datasets(
     "8 minus however many were too long", which is what a short debug run needs.
     """
     if processor is None:
-        from .resolution import build_processor
-
         processor = build_processor(cfg, model_id=model_id)
 
     split_map = {
@@ -196,7 +195,7 @@ def build_datasets(
                 "(longest %d tokens, max_pixels=%d -> %d visual tokens)",
                 name, n_dropped, n_before, 100.0 * n_dropped / max(n_before, 1),
                 cfg.max_length, over[0], cfg.max_pixels,
-                cfg.max_pixels // (28 * 28),
+                cfg.max_pixels // (FACTOR * FACTOR),
             )
         else:
             logger.info(
