@@ -14,17 +14,15 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import sys
 from pathlib import Path
 from typing import Any
 
 import torch
+from peft import PeftModel
+from PIL import Image
+from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
-from src.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION  # noqa: E402
+from src.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION
 
 # ```json ... ``` fences are the single most common way a VLM breaks json.loads while
 # being otherwise correct. Strip them, but report that we had to (gotcha #5).
@@ -34,37 +32,6 @@ _FENCE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
 # --------------------------------------------------------------------------------------
 # Inputs
 # --------------------------------------------------------------------------------------
-
-
-def load_image(path: str, page: int = 0):
-    """Open an image, or rasterise one page of a PDF."""
-    from PIL import Image
-
-    if not path.lower().endswith(".pdf"):
-        return Image.open(path).convert("RGB")
-
-    # Pillow cannot read PDFs. Try the usual rasterisers in order of preference; none of
-    # them is installed in this venv today, so fail with something actionable rather than
-    # an ImportError traceback.
-    try:
-        import pypdfium2 as pdfium  # type: ignore
-
-        pdf = pdfium.PdfDocument(path)
-        return pdf[page].render(scale=200 / 72).to_pil().convert("RGB")
-    except ImportError:
-        pass
-    try:
-        from pdf2image import convert_from_path  # type: ignore
-
-        pages = convert_from_path(path, dpi=200, first_page=page + 1, last_page=page + 1)
-        return pages[0].convert("RGB")
-    except ImportError:
-        pass
-    raise RuntimeError(
-        f"{path} is a PDF but no rasteriser is installed in this environment. "
-        "Install one of `pypdfium2` (pure wheel, no system deps) or `pdf2image` + poppler, "
-        "or convert the page to PNG first."
-    )
 
 
 def resolve_base_model(adapter: str | None, explicit: str | None) -> str:
@@ -85,8 +52,6 @@ def resolve_base_model(adapter: str | None, explicit: str | None) -> str:
 
 
 def load_model_and_processor(args):
-    from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
-
     base = resolve_base_model(args.adapter, args.base_model)
     dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[args.dtype]
 
@@ -101,8 +66,6 @@ def load_model_and_processor(args):
     )
 
     if args.adapter:
-        from peft import PeftModel
-
         print(f"[load] attaching adapter {args.adapter}", flush=True)
         model = PeftModel.from_pretrained(model, args.adapter)
         if args.merge:
@@ -176,8 +139,7 @@ def parse_json(raw: str) -> dict:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--image", required=True, help="Path to a document image, or a .pdf")
-    p.add_argument("--page", type=int, default=0, help="Page index when --image is a PDF")
+    p.add_argument("--image", required=True, help="Path to a document image file (PNG, JPEG, ...)")
     p.add_argument("--adapter", default=None, help="LoRA adapter directory (omit for the base model)")
     p.add_argument("--base-model", default=None, help="Overrides adapter_config.json")
     p.add_argument("--processor", default=None, help="Overrides where the processor is loaded from")
@@ -195,11 +157,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.image.lower().endswith(".pdf"):
+        # No PDF rasteriser is a dependency; fail before minutes of model loading.
+        parser.error(f"{args.image}: PDFs are not supported; convert the page to PNG first")
     sys_prompt = args.system_prompt or SYSTEM_PROMPT
     instruction = args.instruction or USER_INSTRUCTION
 
-    image = load_image(args.image, args.page)
+    image = Image.open(args.image).convert("RGB")
     print(f"[input] {args.image} {image.size[0]}x{image.size[1]}", flush=True)
 
     model, processor = load_model_and_processor(args)

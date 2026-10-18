@@ -37,8 +37,6 @@ from src.data.resolution import (
 )
 from src.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION, target_json
 
-TOKENS_PER_UNIT = FACTOR * FACTOR  # 784 px per merged visual token
-
 
 def percentiles(values: list[int], qs=(0, 5, 25, 50, 75, 95, 100)) -> dict[int, int]:
     s = sorted(values)
@@ -122,8 +120,8 @@ def main() -> int:
 
     print(f"dataset          : {data.dataset_id}")
     print(f"configured caps  : min_pixels={data.min_pixels} "
-          f"({data.min_pixels // TOKENS_PER_UNIT} tokens)  "
-          f"max_pixels={data.max_pixels} ({data.max_pixels // TOKENS_PER_UNIT} tokens)")
+          f"({data.min_pixels // (FACTOR * FACTOR)} tokens)  "
+          f"max_pixels={data.max_pixels} ({data.max_pixels // (FACTOR * FACTOR)} tokens)")
     print(f"max_length       : {data.max_length}")
     print(f"prompt overhead  : {prompt_overhead} tokens (system + instruction + chat "
           f"template, excluding visual tokens)")
@@ -170,7 +168,7 @@ def main() -> int:
             for w, h in sizes
         ]
         print(f"\n  estimated visual tokens @ max_pixels={data.max_pixels} "
-              f"({data.max_pixels // TOKENS_PER_UNIT} tokens):")
+              f"({data.max_pixels // (FACTOR * FACTOR)} tokens):")
         print(f"    {fmt_pct(percentiles(visual))}")
         print(histogram(visual))
 
@@ -189,7 +187,7 @@ def main() -> int:
         print(f"    {'tokens':>7} {'max_pixels':>11} | {'visual p50':>10} {'visual p95':>10} "
               f"{'visual max':>10} | {'total p50':>9} {'total p95':>9} {'total max':>9} | dropped")
         for cand in candidates:
-            mp = cand * TOKENS_PER_UNIT
+            mp = cand * (FACTOR * FACTOR)
             if mp < data.min_pixels:
                 continue
             vis = [estimate_visual_tokens(w, h, data.min_pixels, mp) for w, h in sizes]

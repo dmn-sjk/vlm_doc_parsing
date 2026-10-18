@@ -42,12 +42,11 @@ from __future__ import annotations
 import io
 from typing import Any
 
+from datasets import Image, List
 from PIL import Image as PILImage
+from trl.data_utils import apply_chat_template, prepare_multimodal_messages
 
 from .resolution import estimate_visual_tokens
-
-# Reading only the PNG/JPEG header is enough for .size, but Pillow's decompression-bomb
-# guard trips on nothing in CORD; left at the default.
 
 
 def _render(example: dict[str, Any], processor: Any) -> tuple[str, str]:
@@ -62,8 +61,6 @@ def _render(example: dict[str, Any], processor: Any) -> tuple[str, str]:
     template looks at the image *object*, only at the presence of the block, so this keeps
     the estimator from decoding a single pixel.
     """
-    from trl.data_utils import apply_chat_template, prepare_multimodal_messages
-
     n_images = len(example.get("images", []) or [])
     prompt = prepare_multimodal_messages(example["prompt"], images=[None] * n_images)
     completion = prepare_multimodal_messages(example["completion"])
@@ -77,8 +74,7 @@ def estimate_lengths(
     *,
     min_pixels: int,
     max_pixels: int,
-    return_parts: bool = False,
-) -> list[int] | tuple[list[int], list[dict[str, int]]]:
+) -> list[int]:
     """Estimated total token length of every example, aligned with dataset order.
 
     Args:
@@ -91,9 +87,6 @@ def estimate_lengths(
         min_pixels / max_pixels: the same caps the processor was built with. Passed
             explicitly rather than read off the processor so the stats script can sweep
             candidate caps against a single processor instance.
-        return_parts: also return a per-example breakdown
-            (``prompt_text`` / ``visual`` / ``completion``), which is what
-            ``scripts/dataset_stats.py`` histograms.
 
     Returns:
         ``list[int]`` of length ``len(dataset)``.
@@ -111,8 +104,6 @@ def estimate_lengths(
     ``Image(decode=False)`` so only the compressed bytes are read, and Pillow parses just
     the header to get ``.size``.
     """
-    from datasets import Image, List
-
     tokenizer = processor.tokenizer
 
     # decode=False -> __getitem__ hands back {"bytes", "path"} instead of a decoded PIL
@@ -120,11 +111,6 @@ def estimate_lengths(
     undecoded = dataset.cast_column("images", List(Image(decode=False)))
 
     lengths: list[int] = []
-    parts: list[dict[str, int]] = []
-
-    # The prompt half is identical for every CORD example (the instruction carries no
-    # per-example text), but render per example anyway so this helper stays correct for
-    # datasets where it is not.
     render_cache: dict[str, int] = {}
 
     for row in undecoded:
@@ -151,16 +137,5 @@ def estimate_lengths(
 
         total = prompt_text_tokens - n_images + visual + completion_tokens
         lengths.append(total)
-        if return_parts:
-            parts.append(
-                {
-                    "prompt_text": prompt_text_tokens - n_images,
-                    "visual": visual,
-                    "completion": completion_tokens,
-                    "total": total,
-                }
-            )
 
-    if return_parts:
-        return lengths, parts
     return lengths

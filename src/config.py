@@ -13,7 +13,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, get_type_hints
 
 import yaml
 
@@ -120,38 +120,34 @@ class Config:
 def _from_dict(cls, d: dict[str, Any]):
     """Recursively build a dataclass, rejecting unknown keys loudly."""
     kwargs = {}
-    known = {f.name: f for f in fields(cls)}
-    unknown = set(d) - set(known)
+    # `from __future__ import annotations` makes `f.type` a string; resolve the real types.
+    types = get_type_hints(cls)
+    known = {f.name for f in fields(cls)}
+    unknown = set(d) - known
     if unknown:
         raise ValueError(f"unknown config keys for {cls.__name__}: {sorted(unknown)}")
-    for name, f in known.items():
-        if name not in d:
-            continue
-        value = d[name]
-        if is_dataclass(f.type) and isinstance(value, dict):
-            kwargs[name] = _from_dict(f.type, value)
-        elif isinstance(value, dict) and name in ("data", "model", "train", "lora"):
-            kwargs[name] = _from_dict(
-                {"data": DataConfig, "model": ModelConfig,
-                 "train": TrainConfig, "lora": LoraConfig}[name],
-                value,
-            )
-        else:
+    for name, value in d.items():
+        ftype = types[name]
+        if is_dataclass(ftype):
+            if not isinstance(value, dict):
+                raise ValueError(
+                    f"{cls.__name__}.{name} is a section; expected a mapping, got {value!r}"
+                )
+            value = _from_dict(ftype, value)
+        elif ftype is bool and isinstance(value, str):
             # `parse_override` deliberately keeps `no`/`yes`/`on`/`off` as strings so that
             # string-valued options like `eval_strategy=no` survive. For a field genuinely
             # declared `bool`, convert back -- otherwise `group_by_length=no` would arrive
             # as the non-empty (and therefore truthy) string "no" and silently mean its
-            # opposite. `from __future__ import annotations` makes f.type the literal
-            # annotation text.
-            if str(f.type) == "bool" and isinstance(value, str):
-                token = value.strip().lower()
-                if token in ("no", "off", "false", "0"):
-                    value = False
-                elif token in ("yes", "on", "true", "1"):
-                    value = True
-                else:
-                    raise ValueError(f"{name}: cannot read {value!r} as a boolean")
-            kwargs[name] = value
+            # opposite.
+            token = value.strip().lower()
+            if token in ("no", "off", "false", "0"):
+                value = False
+            elif token in ("yes", "on", "true", "1"):
+                value = True
+            else:
+                raise ValueError(f"{name}: cannot read {value!r} as a boolean")
+        kwargs[name] = value
     return cls(**kwargs)
 
 
