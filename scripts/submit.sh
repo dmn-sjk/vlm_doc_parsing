@@ -9,12 +9,10 @@
 #     --set 'train.output_dir=${SITE_WORK_DIR}/runs/short-2n' --set train.report_to=none
 #   scripts/submit.sh eval <adapter_dir> --split test
 #
-# Options before the job name go to sbatch; they must be bare flags or `--opt=value`
-# (`--time 00:10:00` with a space is not supported). Everything after the job name goes to
-# the sbatch script. Short runs override output_dir and report_to so they never overwrite a
-# real run's adapter or log to its W&B project. Plain
-# `mkdir -p logs; sbatch -A <acct> -p <part> slurm/<file>.sbatch` from the repo root works
-# too; this wrapper only saves typing the site's account and partition.
+# Options before the job name go to sbatch as bare flags or `--opt=value` (not
+# `--opt value`). Everything after the job name goes to the sbatch script. A Short run sets
+# its own output_dir and report_to=none so it never overwrites the published adapter.
+# Plain `mkdir -p logs; sbatch -A <acct> -p <part> slurm/<file>.sbatch` works too.
 set -euo pipefail
 
 # readlink -f: run through a symlink, the repo is where the real file lives.
@@ -46,9 +44,7 @@ case "${job}" in
   *) echo "error: unknown job '${job}'" >&2; usage 2 ;;
 esac
 
-# Only the account and partition are read from the profile, in a subshell: the job sources
-# env.sh itself, so its environment comes from the profile rather than from whatever this
-# login shell happens to hold.
+# Only account and partition, in a subshell: the job sources env.sh itself.
 site=$(
   # shellcheck disable=SC1091
   source scripts/env.sh || exit 1

@@ -1,12 +1,11 @@
-"""Deliverable 2: load the base Qwen2.5-VL, attach (or merge) the LoRA adapter, feed it a
-document image, print structured JSON, and say whether that JSON actually parses.
+"""Load Qwen2.5-VL with the LoRA adapter, extract JSON from a document image, print it.
 
     python -m vlm_doc_parsing.infer.predict --adapter $SITE_WORK_DIR/runs/.../final_adapter \
         --image receipt.png --merge
 
-`--merge` calls `merge_and_unload()` (faster inference, one dense model, no adapter
-bookkeeping); without it the adapter stays attached as a PeftModel, which is what you want
-when you are comparing several adapters or want `disable_adapter()` available.
+Prints the JSON on stdout and exits 0; if the output doesn't parse, prints the raw text and
+exits 1. `--merge` folds the adapter into the base weights for faster inference; without it
+the adapter stays a PeftModel (`disable_adapter()`, comparing adapters).
 """
 
 from __future__ import annotations
@@ -27,14 +26,8 @@ from vlm_doc_parsing.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION
 
 logger = logging.getLogger(__name__)
 
-# ```json ... ``` fences are the single most common way a VLM breaks json.loads while
-# being otherwise correct. Strip them, but report that we had to (gotcha #5).
+# A ```json fence is the most common way otherwise-correct output fails json.loads.
 _FENCE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
-
-
-# --------------------------------------------------------------------------------------
-# Inputs
-# --------------------------------------------------------------------------------------
 
 
 def resolve_base_model(adapter: str | None, explicit: str | None) -> str:
@@ -49,23 +42,13 @@ def resolve_base_model(adapter: str | None, explicit: str | None) -> str:
     return "Qwen/Qwen2.5-VL-7B-Instruct"
 
 
-# --------------------------------------------------------------------------------------
-# Model
-# --------------------------------------------------------------------------------------
-
-
 def load_model_and_processor(args: argparse.Namespace):
     base = resolve_base_model(args.adapter, args.base_model)
     dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[args.dtype]
 
     logger.info("base=%s dtype=%s attn=%s", base, args.dtype, args.attn_implementation)
-    # transformers 5.x: the kwarg is `dtype`; `torch_dtype` is deprecated
-    # (modeling_utils.py:1490).
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-        base,
-        dtype=dtype,
-        attn_implementation=args.attn_implementation,
-        device_map=args.device_map,
+        base, dtype=dtype, attn_implementation=args.attn_implementation, device_map=args.device_map
     )
 
     if args.adapter:
@@ -78,17 +61,11 @@ def load_model_and_processor(args: argparse.Namespace):
         logger.info("no adapter: running the base model")
 
     model.eval()
-    # The adapter directory carries the processor that was used for training (Trainer._save
-    # writes processing_class alongside it), including the min_pixels/max_pixels caps.
-    # Prefer it so inference resolution matches training resolution.
+    # The adapter dir holds the training processor (with its pixel caps): prefer it.
     proc_src = args.processor or (
         args.adapter if args.adapter and (Path(args.adapter) / "preprocessor_config.json").exists() else base
     )
-    proc_kwargs: dict[str, Any] = {}
-    if args.min_pixels:
-        proc_kwargs["min_pixels"] = args.min_pixels
-    if args.max_pixels:
-        proc_kwargs["max_pixels"] = args.max_pixels
+    proc_kwargs = {k: v for k, v in (("min_pixels", args.min_pixels), ("max_pixels", args.max_pixels)) if v}
     logger.info("processor from %s %s", proc_src, proc_kwargs or "")
     processor = AutoProcessor.from_pretrained(proc_src, **proc_kwargs)
     return model, processor
@@ -108,20 +85,15 @@ def generate_json(model, processor, image, system_prompt, instruction, max_new_t
     inputs = build_inputs(processor, image, system_prompt, instruction)
     device = next(model.parameters()).device
     inputs = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in inputs.items()}
-    out = model.generate(
-        **inputs,
-        max_new_tokens=max_new_tokens,
-        do_sample=False,          # extraction is not a creative task: greedy
-        temperature=None,
-        top_p=None,
-        top_k=None,
+    out = model.generate(  # greedy
+        **inputs, max_new_tokens=max_new_tokens, do_sample=False, temperature=None, top_p=None, top_k=None
     )
     prompt_len = inputs["input_ids"].shape[1]
     return processor.tokenizer.decode(out[0][prompt_len:], skip_special_tokens=True)
 
 
 def parse_json(raw: str) -> dict:
-    """json.loads our own output and report exactly how it went."""
+    """`json.loads` the generation after stripping a fence; report how it went."""
     result: dict[str, Any] = {"raw_chars": len(raw), "fenced": False}
     text = raw.strip()
     m = _FENCE.match(text)
@@ -135,9 +107,6 @@ def parse_json(raw: str) -> dict:
         result["parse_ok"] = False
         result["error"] = f"{exc.msg} at line {exc.lineno} col {exc.colno}"
     return result
-
-
-# --------------------------------------------------------------------------------------
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -160,12 +129,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # Logs go to stderr, so stdout carries only the JSON (or the raw text when it fails to parse).
+    # Logs go to stderr; stdout carries only the JSON or the raw text.
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.image.lower().endswith(".pdf"):
-        # No PDF rasteriser is a dependency; fail before minutes of model loading.
+        # Fail before minutes of model loading.
         parser.error(f"{args.image}: PDFs are not supported; convert the page to PNG first")
     sys_prompt = args.system_prompt or SYSTEM_PROMPT
     instruction = args.instruction or USER_INSTRUCTION

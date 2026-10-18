@@ -19,7 +19,7 @@ datasets:
 A LoRA adapter for `Qwen/Qwen2.5-VL-7B-Instruct` that makes the model emit **schema-conformant JSON directly**
 from a receipt image.
 
-**What this adapter actually buys you is reliability, not new reading ability.** The base
+**What this adapter buys you is reliability, not new reading ability.** The base
 model can already read receipts reasonably well — its field recall is 0.65. What it cannot
 do is return parseable output: it wraps 96 of 100 answers in a ```json markdown fence, so a
 strict `json.loads` succeeds **3%** of the time. After tuning that is **100%**, and
@@ -74,7 +74,7 @@ checkpoint under an identical prompt, so the delta is attributable to the adapte
 | Exact match | 0.000 | **0.420** |
 | Normalised edit similarity | 0.496 | **0.946** |
 
-JSON parse-rate is reported separately from field accuracy on purpose: a model that
+JSON parse rate is reported separately from field accuracy because a model that
 extracts every field but emits a trailing comma scores zero downstream. "Strict" is
 `json.loads` on the raw generation; "lenient" first strips a markdown code fence.
 
@@ -99,8 +99,8 @@ extracts every field but emits a trailing comma scores zero downstream. "Strict"
 ## Source code
 
 Training pipeline, SLURM sbatch scripts and Accelerate/FSDP configs:
-**[https://github.com/dmn-sjk/vlm_doc_parsing.git](https://github.com/dmn-sjk/vlm_doc_parsing.git)**
+**[https://github.com/dmn-sjk/vlm_doc_parsing](https://github.com/dmn-sjk/vlm_doc_parsing)**
 
 See
-[`src/vlm_doc_parsing/infer/predict.py`](https://github.com/dmn-sjk/vlm_doc_parsing.git/blob/master/src/vlm_doc_parsing/infer/predict.py)
+[`src/vlm_doc_parsing/infer/predict.py`](https://github.com/dmn-sjk/vlm_doc_parsing/blob/master/src/vlm_doc_parsing/infer/predict.py)
 there for a complete inference example, including `--merge` (`merge_and_unload`) for faster serving.

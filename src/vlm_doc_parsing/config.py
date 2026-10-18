@@ -1,9 +1,4 @@
-"""Shared config schema.
-
-This module is the contract between the data pipeline (Phase 1) and the training /
-inference entrypoints (Phase 2). Experiments are reproducible from a committed YAML +
-sbatch pair, so every knob lives here rather than in an edited-in-place script.
-"""
+"""Config schema shared by data, training and evaluation, loaded from YAML + `--set` overrides."""
 
 from __future__ import annotations
 
@@ -25,21 +20,18 @@ class DataConfig:
     eval_split: str = "validation"
     test_split: str = "test"
 
-    # Cap on the number of examples per split (None = all). For short debug runs.
+    # Examples per split (None = all), for Short runs.
     max_train_samples: int | None = None
     max_eval_samples: int | None = None
 
-    # Dynamic-resolution caps handed to Qwen2_5_VLProcessor. Visual tokens are the
-    # dominant term in sequence length, so this is the primary OOM lever.
-    # 28*28 = one visual patch after the 2x2 merge; keep both multiples of that.
+    # Processor resolution caps, the main OOM lever. Multiples of 28*28 (one visual token).
     min_pixels: int = 256 * 28 * 28
     max_pixels: int = 1024 * 28 * 28
 
-    # Drop examples whose estimated visual+text token count exceeds this.
+    # Drop examples longer than this (visual + text tokens).
     max_length: int = 4096
 
-    # Group samples of similar estimated visual-token count into the same batch so
-    # ranks stay balanced at the all-reduce.
+    # Batch similar lengths together so ranks don't wait on each other at the all-reduce.
     group_by_length: bool = True
 
     num_proc: int = 8
@@ -52,14 +44,11 @@ class LoraConfig:
     alpha: int = 64
     dropout: float = 0.05
     bias: str = "none"
-    # Attention + MLP projections of the text decoder. NOTE: never include `lm_head`
-    # here -- TRL refuses loss_type="chunked_nll" when lm_head is wrapped by a PEFT
-    # adapter (trl/trainer/sft_trainer.py:1333).
+    # Never `lm_head`: TRL rejects loss_type="chunked_nll" with a PEFT lm_head.
     target_modules: list[str] = field(
         default_factory=lambda: ["q_proj", "k_proj", "v_proj", "o_proj",
                                  "gate_proj", "up_proj", "down_proj"]
     )
-    # When False, the vision tower is excluded from adaptation and stays frozen.
     adapt_vision_tower: bool = False
     modules_to_save: list[str] = field(default_factory=list)
 
@@ -67,7 +56,7 @@ class LoraConfig:
 @dataclass
 class ModelConfig:
     base_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
-    attn_implementation: str = "sdpa"  # "flash_attention_2" if the wheel is available
+    attn_implementation: str = "sdpa"  # flash-attn is not installed
     dtype: str = "bfloat16"
     freeze_vision_tower: bool = True
     gradient_checkpointing: bool = True
@@ -102,14 +91,13 @@ class TrainConfig:
     seed: int = 42
     report_to: str = "wandb"
 
-    # SFTConfig specifics. chunked_nll drops -100 positions before the lm_head matmul,
-    # which is what keeps peak activation memory off the vocab dimension.
+    # chunked_nll keeps peak activation memory off the vocab dimension.
     loss_type: str = "chunked_nll"
     completion_only_loss: bool = True
     packing: bool = False        # unsupported for vision datasets
     padding_free: bool = False   # unsupported for vision datasets
 
-    ddp_timeout: int = 3600  # rank-0-only checkpoint read + sync_module_states broadcast is slow
+    ddp_timeout: int = 3600  # covers rank 0 reading and broadcasting the checkpoint
     dataloader_num_workers: int = 2
 
 
@@ -121,10 +109,9 @@ class Config:
 
 
 def _from_dict(cls, d: dict[str, Any]):
-    """Recursively build a dataclass, rejecting unknown keys loudly."""
+    """Recursively build a dataclass, rejecting unknown keys."""
     kwargs = {}
-    # `from __future__ import annotations` makes `f.type` a string; resolve the real types.
-    types = get_type_hints(cls)
+    types = get_type_hints(cls)  # f.type is a string under `from __future__ import annotations`
     known = {f.name for f in fields(cls)}
     unknown = set(d) - known
     if unknown:
@@ -138,11 +125,7 @@ def _from_dict(cls, d: dict[str, Any]):
                 )
             value = _from_dict(ftype, value)
         elif ftype is bool and isinstance(value, str):
-            # `parse_override` deliberately keeps `no`/`yes`/`on`/`off` as strings so that
-            # string-valued options like `eval_strategy=no` survive. For a field genuinely
-            # declared `bool`, convert back -- otherwise `group_by_length=no` would arrive
-            # as the non-empty (and therefore truthy) string "no" and silently mean its
-            # opposite.
+            # parse_override keeps `no`/`yes`/`on`/`off` as strings; a truthy "no" would invert a flag.
             token = value.strip().lower()
             if token in ("no", "off", "false", "0"):
                 value = False
@@ -165,8 +148,7 @@ def _deep_update(base: dict, other: dict) -> dict:
 
 
 def _load_yaml(path: Path, chain: tuple[Path, ...] = ()) -> dict:
-    """Read a YAML config, resolving a top-level `extends: <path relative to this file>`
-    by deep-merging this file over its parent."""
+    """Read a YAML config, deep-merging it over its `extends:` parent (relative path)."""
     path = path.resolve()
     if path in chain:
         raise ValueError(f"config extends cycle: {' -> '.join(map(str, chain + (path,)))}")
@@ -182,23 +164,15 @@ def _load_yaml(path: Path, chain: tuple[Path, ...] = ()) -> dict:
 
 
 def load_config(path: str | Path | None, overrides: Iterable[str] = ()) -> Config:
-    """Load a YAML config (or the defaults when `path` is None), then deep-merge each
-    `KEY.PATH=VALUE` override on top, in order (CLI wins)."""
-    raw = {}
-    if path is not None:
-        raw = _load_yaml(Path(path))
+    """Load a YAML config (defaults if `path` is None) and deep-merge `KEY.PATH=VALUE` overrides."""
+    raw = _load_yaml(Path(path)) if path is not None else {}
     for item in overrides:
         raw = _deep_update(raw, parse_override(item))
     return _from_dict(Config, raw)
 
 
 def expand_path(path: str) -> str:
-    """Expand `${VAR}` in a config path, refusing to leave any unexpanded.
-
-    `os.path.expandvars` leaves an unset `${VAR}` in place, which silently creates a
-    directory literally named `${SITE_WORK_DIR}` under the cwd. Only `$VAR` / `${VAR}`
-    are supported; shell forms such as `${VAR:-default}` are rejected.
-    """
+    """Expand `$VAR` / `${VAR}`; raise on an unset one (expandvars would leave it literal)."""
     expanded = os.path.expandvars(path)
     leftover = re.findall(r"\$\{?(\w+)", expanded)
     if leftover:
@@ -215,18 +189,14 @@ def parse_override(item: str) -> dict[str, Any]:
     if not _:
         raise ValueError(f"override must be key=value, got {item!r}")
     parsed = yaml.safe_load(value)
-    # YAML 1.1 does not recognise `2e-4` as a float (it wants `2.0e-4`), and learning
-    # rates are typed that way constantly. Recover the numeric intent.
+    # YAML 1.1 reads `2e-4` as a string.
     if isinstance(parsed, str):
         try:
             parsed = float(parsed)
         except ValueError:
             pass
-    # YAML 1.1 also reads `no`/`yes`/`on`/`off` as booleans, but several of our options are
-    # strings that happen to spell one of those -- `eval_strategy=no`, `save_strategy=no`,
-    # `report_to=no`. Left alone this yields `False is not a valid IntervalStrategy` at
-    # trainer construction, minutes into a queued multi-node job. `true`/`false` still
-    # parse as real booleans, which is what anyone setting an actual flag would type.
+    # YAML 1.1 reads `no`/`yes`/`on`/`off` as booleans, which breaks `eval_strategy=no`.
+    # Keep them as strings; `_from_dict` converts them back for bool fields.
     if isinstance(parsed, bool) and value.strip().lower() in ("no", "yes", "on", "off"):
         parsed = value.strip()
     out: dict[str, Any] = {}
