@@ -42,14 +42,15 @@ from __future__ import annotations
 import io
 from typing import Any
 
-from datasets import Image, List
+from datasets import Dataset, Image, List
 from PIL import Image as PILImage
+from transformers import ProcessorMixin
 from trl.data_utils import apply_chat_template, prepare_multimodal_messages
 
 from vlm_doc_parsing.data.resolution import estimate_visual_tokens
 
 
-def _render(example: dict[str, Any], processor: Any) -> tuple[str, str]:
+def _render(example: dict[str, Any], processor: ProcessorMixin) -> tuple[str, str]:
     """Render one prompt-completion example exactly as TRL's vision collator does.
 
     Mirrors ``DataCollatorForVisionLanguageModeling._collate_prompt_completion``
@@ -69,8 +70,8 @@ def _render(example: dict[str, Any], processor: Any) -> tuple[str, str]:
 
 
 def estimate_lengths(
-    dataset,
-    processor: Any,
+    dataset: Dataset,
+    processor: ProcessorMixin,
     *,
     min_pixels: int,
     max_pixels: int,

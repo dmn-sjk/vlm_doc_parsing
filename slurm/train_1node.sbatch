@@ -33,6 +33,7 @@ source scripts/env.sh
 export HF_HUB_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 export WANDB_PROJECT=qwen25vl-cord-json   # set here, never in code (credentials: ~/.netrc)
+export PYTHONUNBUFFERED=1
 
 # Single node: NCCL stays on NVLink, so none of the IB tuning in train_multinode.sbatch
 # applies. Async error handling still matters -- a hung collective should abort, not idle

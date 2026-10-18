@@ -33,7 +33,7 @@ from accelerate import PartialState
 from peft import LoraConfig as PeftLoraConfig
 from safetensors.torch import load_file
 from torch.utils.data import SequentialSampler
-from transformers import Qwen2_5_VLForConditionalGeneration
+from transformers import Qwen2_5_VLForConditionalGeneration, set_seed
 from transformers.trainer_pt_utils import LengthGroupedSampler
 from trl import SFTConfig, SFTTrainer
 
@@ -42,7 +42,7 @@ from vlm_doc_parsing.data.cord import build_datasets
 from vlm_doc_parsing.data.grouping import estimate_lengths
 from vlm_doc_parsing.data.resolution import build_processor
 
-logger = logging.getLogger("train_sft")
+logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------------------
@@ -87,7 +87,7 @@ VISION_TOWER_PATH = "model.visual"
 VISION_TOWER_EXCLUDE_RE = r"model\.visual\..*"
 
 
-def load_model(cfg: Config):
+def load_model(cfg: Config) -> Qwen2_5_VLForConditionalGeneration:
     dtype = _DTYPES[cfg.model.dtype]
     # transformers 5.x renamed `torch_dtype` -> `dtype`; the old name still works but logs a
     # deprecation warning (modeling_utils.py:1490, :4131).
@@ -107,11 +107,11 @@ def load_model(cfg: Config):
             p.requires_grad_(False)
             n += p.numel()
         if PartialState().is_main_process:
-            print(f"[model] froze vision tower ({VISION_TOWER_PATH}): {n / 1e6:.1f}M params", flush=True)
+            logger.info("froze vision tower (%s): %.1fM params", VISION_TOWER_PATH, n / 1e6)
     return model
 
 
-def build_peft_config(cfg: Config):
+def build_peft_config(cfg: Config) -> PeftLoraConfig:
     """LoRA config for the text decoder only (unless data says otherwise).
 
     Two traps, both verified against the real module tree:
@@ -214,7 +214,7 @@ class LengthGroupedVisionSFTTrainer(SFTTrainer):
         return None
 
 
-def build_sft_config(cfg: Config, output_dir: str):
+def build_sft_config(cfg: Config, output_dir: str) -> SFTConfig:
     t = cfg.train
     return SFTConfig(
         output_dir=output_dir,
@@ -256,8 +256,8 @@ def build_sft_config(cfg: Config, output_dir: str):
         # --- batching ------------------------------------------------------------------
         train_sampling_strategy="group_by_length" if cfg.data.group_by_length else "random",
         # --- distributed ---------------------------------------------------------------
-        ddp_timeout=3600,  # rank-0-only checkpoint read + sync_module_states broadcast is slow
-        dataloader_num_workers=2,
+        ddp_timeout=t.ddp_timeout,
+        dataloader_num_workers=t.dataloader_num_workers,
         dataloader_pin_memory=True,
     )
 
@@ -267,7 +267,7 @@ def build_sft_config(cfg: Config, output_dir: str):
 # --------------------------------------------------------------------------------------
 
 
-def save_adapter(trainer, cfg: Config, output_dir: str, resolved: dict) -> None:
+def save_adapter(trainer: SFTTrainer, cfg: Config, output_dir: str, resolved: dict) -> None:
     """Save the LoRA adapter correctly under FSDP, then prove it is not empty.
 
     `Trainer.save_model` is *collective* under FSDP: every rank must enter it, because
@@ -294,10 +294,10 @@ def save_adapter(trainer, cfg: Config, output_dir: str, resolved: dict) -> None:
         yaml.safe_dump(resolved, fh, sort_keys=False)
 
     report = verify_adapter(final_dir)
-    print(json.dumps({"adapter_check": report}, indent=2), flush=True)
+    logger.info("adapter check:\n%s", json.dumps({"adapter_check": report}, indent=2))
     if not report["ok"]:
         raise RuntimeError(f"adapter at {final_dir} looks empty/degenerate: {report}")
-    print(f"[save] adapter written to {final_dir}", flush=True)
+    logger.info("adapter written to %s", final_dir)
 
 
 def verify_adapter(path: str) -> dict:
@@ -357,16 +357,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # Global rank 0 only: `state.print` would repeat these once per node.
     if state.is_main_process:
-        print("=" * 78)
-        print("resolved config")
-        print("=" * 78)
-        print(yaml.safe_dump(resolved, sort_keys=False).rstrip())
-        print("=" * 78)
-        print(
-            f"[dist] world_size={state.num_processes} device={device} "
-            f"fsdp={os.environ.get('ACCELERATE_USE_FSDP', 'false')} "
-            f"cpu_ram_efficient_loading={os.environ.get('FSDP_CPU_RAM_EFFICIENT_LOADING', 'false')}",
-            flush=True,
+        logger.info("resolved config:\n%s", yaml.safe_dump(resolved, sort_keys=False).rstrip())
+        logger.info(
+            "world_size=%d device=%s fsdp=%s cpu_ram_efficient_loading=%s",
+            state.num_processes,
+            device,
+            os.environ.get("ACCELERATE_USE_FSDP", "false"),
+            os.environ.get("FSDP_CPU_RAM_EFFICIENT_LOADING", "false"),
         )
 
     processor = build_processor(cfg.data, model_id=cfg.model.base_model)
@@ -396,14 +393,16 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if state.is_main_process:
-        print(f"[data] train={len(train_ds)}" + (f" eval={len(eval_ds)}" if eval_ds is not None else ""))
+        logger.info("train=%d eval=%s", len(train_ds), len(eval_ds) if eval_ds is not None else "-")
         if lengths is not None:
-            print(
-                f"[data] length signal: min={min(lengths)} p50={sorted(lengths)[len(lengths) // 2]} "
-                f"max={max(lengths)}",
-                flush=True,
+            logger.info(
+                "length signal: min=%d p50=%d max=%d",
+                min(lengths), sorted(lengths)[len(lengths) // 2], max(lengths),
             )
 
+    # SFTTrainer initialises LoRA before Trainer calls set_seed, so seed here or the adapter
+    # init depends on whatever consumed the RNG earlier.
+    set_seed(cfg.train.seed)
     model = load_model(cfg)
     peft_config = build_peft_config(cfg)
 
@@ -421,11 +420,11 @@ def main(argv: list[str] | None = None) -> int:
         trainer.model.print_trainable_parameters()
         adapted = [n for n, _ in trainer.model.named_modules() if n.endswith(".lora_A")]
         in_vision = [n for n in adapted if ".visual." in n]
-        print(f"[peft] adapted modules: {len(adapted)} (inside vision tower: {len(in_vision)})", flush=True)
+        logger.info("adapted modules: %d (inside vision tower: %d)", len(adapted), len(in_vision))
 
     if args.dry_run:
         if state.is_main_process:
-            print("[dry-run] trainer built successfully; exiting before train()", flush=True)
+            logger.info("dry run: trainer built; exiting before train()")
         return 0
 
     trainer.train()
@@ -438,17 +437,16 @@ def main(argv: list[str] | None = None) -> int:
         peak_gib = torch.cuda.max_memory_allocated() / 1024**3
         reserved_gib = torch.cuda.max_memory_reserved() / 1024**3
         total_gib = torch.cuda.get_device_properties(0).total_memory / 1024**3
-        print(
-            f"[vram] rank={state.process_index} peak_allocated={peak_gib:.2f}GiB "
-            f"peak_reserved={reserved_gib:.2f}GiB device_total={total_gib:.2f}GiB "
-            f"headroom={total_gib - reserved_gib:.2f}GiB",
-            flush=True,
+        logger.info(
+            "vram rank=%d peak_allocated=%.2fGiB peak_reserved=%.2fGiB device_total=%.2fGiB "
+            "headroom=%.2fGiB",
+            state.process_index, peak_gib, reserved_gib, total_gib, total_gib - reserved_gib,
         )
 
     if eval_ds is not None:
         metrics = trainer.evaluate()
         if state.is_main_process:
-            print(f"[eval] {metrics}", flush=True)
+            logger.info("eval %s", metrics)
 
     save_adapter(trainer, cfg, output_dir, resolved)
     return 0

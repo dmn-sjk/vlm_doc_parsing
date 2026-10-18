@@ -22,8 +22,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import sys
 import time
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +40,8 @@ from vlm_doc_parsing.infer.predict import (
     load_model_and_processor,
     parse_json,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------------------
@@ -64,9 +69,24 @@ def flatten(obj: Any, prefix: str = "") -> Counter:
     return out
 
 
-def prf(pred: Counter, gold: Counter) -> tuple[int, int, int]:
-    tp = sum((pred & gold).values())
-    return tp, sum(pred.values()), sum(gold.values())
+@dataclass
+class FieldCounts:
+    """Running multiset-match counts; `metrics()` turns them into P/R/F1."""
+
+    tp: int = 0
+    n_pred: int = 0
+    n_gold: int = 0
+
+    def add(self, pred: Counter, gold: Counter) -> None:
+        self.tp += sum((pred & gold).values())
+        self.n_pred += sum(pred.values())
+        self.n_gold += sum(gold.values())
+
+    def metrics(self) -> dict[str, float | int]:
+        p = self.tp / self.n_pred if self.n_pred else 0.0
+        r = self.tp / self.n_gold if self.n_gold else 0.0
+        return {"precision": p, "recall": r, "f1": 2 * p * r / (p + r) if p + r else 0.0,
+                "tp": self.tp, "n_pred": self.n_pred, "n_gold": self.n_gold}
 
 
 def canonical(obj: Any) -> str:
@@ -112,15 +132,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stdout,
+    )
     args = build_parser().parse_args(argv)
 
     cfg = load_config(args.config, args.overrides)
 
     split = {"train": cfg.data.train_split, "validation": cfg.data.eval_split, "test": cfg.data.test_split}[args.split]
-    ds = build_datasets(cfg.data)[split]
+    ds = build_datasets(cfg.data, processor=None, model_id=cfg.model.base_model)[split]
     if args.limit:
         ds = ds.select(range(min(args.limit, len(ds))))
-    print(f"[eval] split={split} n={len(ds)}", flush=True)
+    logger.info("split=%s n=%d", split, len(ds))
 
     # Reuse the *inference* loader so eval cannot silently diverge from what predict.py
     # does; the resolution caps come from the same config the run trained with.
@@ -130,8 +155,8 @@ def main(argv: list[str] | None = None) -> int:
 
     n = len(ds)
     strict_ok = lenient_ok = 0
-    tp_p = pred_p = gold_p = 0            # over parseable predictions only
-    tp_a = pred_a = gold_a = 0            # over all predictions
+    parseable = FieldCounts()             # over parseable predictions only
+    overall = FieldCounts()               # over all predictions
     exact = 0
     edit_sims: list[float] = []
     records = []
@@ -162,26 +187,19 @@ def main(argv: list[str] | None = None) -> int:
         if parsed["parse_ok"]:
             pred_flat = flatten(parsed["json"])
             pred_str = canonical(parsed["json"])
-            tp, np_, ng = prf(pred_flat, gold_flat)
-            tp_p += tp; pred_p += np_; gold_p += ng
-            tp_a += tp; pred_a += np_; gold_a += ng
+            parseable.add(pred_flat, gold_flat)
+            overall.add(pred_flat, gold_flat)
             exact += int(pred_str == gold_str)
             edit_sims.append(norm_edit_sim(pred_str, gold_str))
         else:
-            gold_a += sum(gold_flat.values())     # zero credit, full recall penalty
+            overall.add(Counter(), gold_flat)     # zero credit, full recall penalty
             edit_sims.append(norm_edit_sim(raw.strip(), gold_str))
 
         if args.dump_predictions:
             records.append({"index": i, "raw": raw, "parse_ok": parsed["parse_ok"], "gold": gold})
         if (i + 1) % 10 == 0 or i + 1 == n:
             rate = (i + 1) / max(time.time() - t0, 1e-6)
-            print(f"[eval] {i + 1}/{n}  lenient_parse={lenient_ok / (i + 1):.3f}  {rate:.2f} ex/s", flush=True)
-
-    def _f1(tp, np_, ng):
-        p = tp / np_ if np_ else 0.0
-        r = tp / ng if ng else 0.0
-        return {"precision": p, "recall": r, "f1": 2 * p * r / (p + r) if p + r else 0.0,
-                "tp": tp, "n_pred": np_, "n_gold": ng}
+            logger.info("%d/%d  lenient_parse=%.3f  %.2f ex/s", i + 1, n, lenient_ok / (i + 1), rate)
 
     results = {
         "n": n,
@@ -196,22 +214,22 @@ def main(argv: list[str] | None = None) -> int:
             "n_lenient_ok": lenient_ok,
             "n_fence_repaired": lenient_ok - strict_ok,
         },
-        "field_metrics_parseable_only": _f1(tp_p, pred_p, gold_p),
-        "field_metrics_all": _f1(tp_a, pred_a, gold_a),
+        "field_metrics_parseable_only": parseable.metrics(),
+        "field_metrics_all": overall.metrics(),
         "exact_match": exact / n if n else 0.0,
         "norm_edit_similarity": sum(edit_sims) / len(edit_sims) if edit_sims else 0.0,
         "wall_seconds": time.time() - t0,
     }
 
-    print(json.dumps(results, indent=2), flush=True)
+    print(json.dumps(results, indent=2))
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(results, indent=2))
-    print(f"[eval] results written to {args.out}", flush=True)
+    logger.info("results written to %s", args.out)
     if args.dump_predictions:
         with open(args.dump_predictions, "w") as fh:
             for rec in records:
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        print(f"[eval] predictions written to {args.dump_predictions}", flush=True)
+        logger.info("predictions written to %s", args.dump_predictions)
     return 0
 
 

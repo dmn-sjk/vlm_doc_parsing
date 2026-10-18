@@ -13,11 +13,12 @@ applies the token count that ``Qwen2_5_VLProcessor.replace_image_token`` derives
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
-from transformers import AutoProcessor
+from transformers import AutoProcessor, ProcessorMixin
 from transformers.models.qwen2_vl.image_processing_qwen2_vl import smart_resize
+
+from vlm_doc_parsing.config import DataConfig
 
 # Qwen2.5-VL ViT geometry, from Qwen2VLImageProcessor class attributes.
 PATCH_SIZE = 14
@@ -68,17 +69,11 @@ def estimate_resized_size(
     return resized_w, resized_h
 
 
-def build_processor(cfg: Any, model_id: str | None = None, **kwargs: Any):
+def build_processor(cfg: DataConfig, model_id: str, **kwargs: Any) -> ProcessorMixin:
     """Load the Qwen2.5-VL processor with the resolution caps from :class:`DataConfig`.
 
-    Args:
-        cfg: a ``DataConfig`` (anything with ``min_pixels`` / ``max_pixels``).
-        model_id: HF id or local path of the base model. ``DataConfig`` deliberately does
-            not carry the model id (it lives on ``ModelConfig``), so Phase 2 should pass
-            ``model_cfg.base_model``. Defaults to ``$BASE_MODEL`` and then to the
-            ``ModelConfig`` default, which keeps the data-only scripts runnable with just
-            a ``DataConfig``.
-        **kwargs: forwarded to ``AutoProcessor.from_pretrained``.
+    ``model_id`` is ``ModelConfig.base_model`` (``DataConfig`` does not carry it);
+    ``kwargs`` go to ``AutoProcessor.from_pretrained``.
 
     Where the pixel caps go, verified against transformers 5.16.1:
 
@@ -99,9 +94,6 @@ def build_processor(cfg: Any, model_id: str | None = None, **kwargs: Any):
     during training. Setting it here would only create a misleading impression that it
     matters. Inference code that batches generation should set ``"left"`` itself.
     """
-    if model_id is None:
-        model_id = os.environ.get("BASE_MODEL") or "Qwen/Qwen2.5-VL-7B-Instruct"
-
     min_pixels = int(cfg.min_pixels)
     max_pixels = int(cfg.max_pixels)
     if min_pixels % (FACTOR * FACTOR) or max_pixels % (FACTOR * FACTOR):

@@ -26,6 +26,7 @@ source scripts/env.sh
 export HF_HUB_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 export WANDB_MODE=disabled
+export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS=8         # one process; matches the value the published eval used
 
 # Pass the literal string "base" to score the un-finetuned checkpoint. A fine-tuned score

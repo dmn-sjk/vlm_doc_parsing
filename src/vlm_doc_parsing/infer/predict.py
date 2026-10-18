@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,8 @@ from PIL import Image
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
 from vlm_doc_parsing.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION
+
+logger = logging.getLogger(__name__)
 
 # ```json ... ``` fences are the single most common way a VLM breaks json.loads while
 # being otherwise correct. Strip them, but report that we had to (gotcha #5).
@@ -51,11 +54,11 @@ def resolve_base_model(adapter: str | None, explicit: str | None) -> str:
 # --------------------------------------------------------------------------------------
 
 
-def load_model_and_processor(args):
+def load_model_and_processor(args: argparse.Namespace):
     base = resolve_base_model(args.adapter, args.base_model)
     dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[args.dtype]
 
-    print(f"[load] base={base} dtype={args.dtype} attn={args.attn_implementation}", flush=True)
+    logger.info("base=%s dtype=%s attn=%s", base, args.dtype, args.attn_implementation)
     # transformers 5.x: the kwarg is `dtype`; `torch_dtype` is deprecated
     # (modeling_utils.py:1490).
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
@@ -66,13 +69,13 @@ def load_model_and_processor(args):
     )
 
     if args.adapter:
-        print(f"[load] attaching adapter {args.adapter}", flush=True)
+        logger.info("attaching adapter %s", args.adapter)
         model = PeftModel.from_pretrained(model, args.adapter)
         if args.merge:
-            print("[load] merge_and_unload()", flush=True)
+            logger.info("merge_and_unload()")
             model = model.merge_and_unload()
     else:
-        print("[load] no adapter -- running the base model", flush=True)
+        logger.info("no adapter: running the base model")
 
     model.eval()
     # The adapter directory carries the processor that was used for training (Trainer._save
@@ -86,7 +89,7 @@ def load_model_and_processor(args):
         proc_kwargs["min_pixels"] = args.min_pixels
     if args.max_pixels:
         proc_kwargs["max_pixels"] = args.max_pixels
-    print(f"[load] processor from {proc_src} {proc_kwargs or ''}", flush=True)
+    logger.info("processor from %s %s", proc_src, proc_kwargs or "")
     processor = AutoProcessor.from_pretrained(proc_src, **proc_kwargs)
     return model, processor
 
@@ -157,6 +160,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Logs go to stderr, so stdout carries only the JSON (or the raw text when it fails to parse).
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.image.lower().endswith(".pdf"):
@@ -166,25 +171,22 @@ def main(argv: list[str] | None = None) -> int:
     instruction = args.instruction or USER_INSTRUCTION
 
     image = Image.open(args.image).convert("RGB")
-    print(f"[input] {args.image} {image.size[0]}x{image.size[1]}", flush=True)
+    logger.info("input %s %dx%d", args.image, image.size[0], image.size[1])
 
     model, processor = load_model_and_processor(args)
     raw = generate_json(model, processor, image, sys_prompt, instruction, args.max_new_tokens)
 
     result = parse_json(raw)
-    print("=" * 72, flush=True)
     if result["parse_ok"]:
-        print(json.dumps(result["json"], indent=2, ensure_ascii=False), flush=True)
-        print("=" * 72, flush=True)
-        print(f"[json] parse_ok=True fenced={result['fenced']} chars={result['raw_chars']}", flush=True)
+        print(json.dumps(result["json"], indent=2, ensure_ascii=False))
+        logger.info("parse_ok=True fenced=%s chars=%d", result["fenced"], result["raw_chars"])
         if args.out:
             Path(args.out).write_text(json.dumps(result["json"], indent=2, ensure_ascii=False))
-            print(f"[json] written to {args.out}", flush=True)
+            logger.info("written to %s", args.out)
         return 0
 
-    print(raw, flush=True)
-    print("=" * 72, flush=True)
-    print(f"[json] parse_ok=False error={result['error']}", flush=True)
+    print(raw)
+    logger.error("parse_ok=False error=%s", result["error"])
     return 1
 
 

@@ -25,6 +25,7 @@ source scripts/env.sh
 export HF_HUB_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 export WANDB_PROJECT=qwen25vl-cord-json   # set here, never in code (credentials: ~/.netrc)
+export PYTHONUNBUFFERED=1
 
 # Read off the allocation, not written down. SLURM_GPUS_ON_NODE is not exported to the
 # batch step by every Slurm version/config, hence the fallback (nodes are homogeneous, so
@@ -66,26 +67,6 @@ echo "job=${SLURM_JOB_ID} nodes=${NNODES} nproc=${NPROC} master=${MASTER_ADDR}:$
 scontrol show hostnames "$SLURM_JOB_NODELIST"
 
 TRAIN_CFG="${TRAIN_CFG:-configs/sft_multinode.yaml}"
+export NPROC NNODES TRAIN_CFG MASTER_ADDR MASTER_PORT
 
-# `\$SLURM_PROCID` is escaped on purpose: it must be expanded inside each srun task
-# (0 on the first node, 1 on the second), not by this batch shell.
-LAUNCHER="accelerate launch \
-  --config_file configs/accelerate_fsdp.yaml \
-  --num_processes ${NPROC} \
-  --num_machines ${NNODES} \
-  --machine_rank \$SLURM_PROCID \
-  --main_process_ip ${MASTER_ADDR} \
-  --main_process_port ${MASTER_PORT}"
-
-# `bash -c` re-parses its argument, so a bare `$*` silently strips one layer of quoting:
-# `--set train.eval_strategy="no"` arrives as `...=no`, YAML reads bare `no` as boolean
-# false, and TrainingArguments dies with "False is not a valid IntervalStrategy"
-# (observed in job 3108801). printf %q re-escapes each argument so it survives the extra
-# parse intact. The single-node script passes "$@" straight to accelerate and needs none
-# of this. With no args printf would still emit `''`, an empty argv element argparse
-# rejects, hence the guard.
-FWD_ARGS=""
-[ $# -eq 0 ] || FWD_ARGS=$(printf '%q ' "$@")
-
-srun --ntasks="${NNODES}" --ntasks-per-node=1 \
-  bash -c "${LAUNCHER} -m vlm_doc_parsing.train.train_sft --config ${TRAIN_CFG} ${FWD_ARGS}"
+srun --ntasks="${NNODES}" --ntasks-per-node=1 slurm/launch_node.sh "$@"

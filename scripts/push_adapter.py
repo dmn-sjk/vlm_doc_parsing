@@ -9,21 +9,18 @@ as `README.md`. Edit that file, not this script, to change what the Hub page say
 
 The token comes from `HF_TOKEN` in the environment (scripts/env.sh sources the gitignored
 .env). It is never printed and never read in --dry-run mode.
-
-The token in use is fine-grained and scoped to the `dmnsjk` entity
-(repo.content.read / repo.access.read / repo.write / discussion.write), which is why the
-target repo is fixed to the `dmnsjk/` namespace.
 """
 
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import sys
 from pathlib import Path
 
-REPO_ID = "dmnsjk/qwen2.5-vl-7b-cord-json-lora"
+DEFAULT_REPO_ID = "dmnsjk/qwen2.5-vl-7b-cord-json-lora"
 MODEL_CARD = Path(__file__).resolve().parent.parent / "model_card" / "model_card.md"
 
 # Files that must be present for `PeftModel.from_pretrained(base, repo_id)` to work.
@@ -34,11 +31,14 @@ IGNORE = [
     "checkpoint-*/*", "optimizer.pt", "scheduler.pt", "rng_state*", "trainer_state.json",
     "training_args.bin", "*.pt", "**/pytorch_model_fsdp*", ".git*",
 ]
+# PEFT's save_pretrained writes its own README.md; the model card replaces it.
+UPLOAD_IGNORE = IGNORE + ["README.md"]
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--adapter", required=True, help="Directory produced by train_sft.py (final_adapter/)")
+    p.add_argument("--repo-id", default=DEFAULT_REPO_ID, help="Target Hub model repo")
     p.add_argument("--private", action="store_true", help="Create the repo private")
     p.add_argument("--commit-message", default="Add Qwen2.5-VL CORD JSON LoRA adapter")
     p.add_argument("--dry-run", action="store_true",
@@ -65,12 +65,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: model card not found at {MODEL_CARD}", file=sys.stderr)
         return 2
 
-    card = MODEL_CARD.read_text()
-    files = sorted(f.name for f in adapter.iterdir() if f.is_file())
-    total = sum(f.stat().st_size for f in adapter.iterdir() if f.is_file())
+    uploaded = [
+        f for f in adapter.iterdir()
+        if f.is_file() and not any(fnmatch.fnmatch(f.name, pat) for pat in UPLOAD_IGNORE)
+    ]
+    files = sorted(f.name for f in uploaded)
+    total = sum(f.stat().st_size for f in uploaded)
 
     print(f"adapter:  {adapter}")
-    print(f"repo_id:  {REPO_ID}  (private={args.private})")
+    print(f"repo_id:  {args.repo_id}  (private={args.private})")
     print(f"card:     {MODEL_CARD} -> README.md")
     print(f"files:    {files}")
     print(f"size:     {total / 1e6:.1f} MB")
@@ -93,27 +96,31 @@ def main(argv: list[str] | None = None) -> int:
     who = api.whoami()
     print(f"[hub] authenticated as {who.get('name')}")   # name only; never the token
 
-    (adapter / "README.md").write_text(card)
-
     try:
-        api.create_repo(repo_id=REPO_ID, repo_type="model", private=args.private, exist_ok=True)
+        api.create_repo(repo_id=args.repo_id, repo_type="model", private=args.private, exist_ok=True)
     except HfHubHTTPError as exc:
         # repo.write on the user entity covers create_repo in that namespace. A 403 here is
         # a real permission problem (the token was rotated or rescoped) -- report it rather
         # than retrying blindly.
         print(f"error: create_repo failed ({exc.response.status_code if exc.response else '?'}). "
-              f"Check that {REPO_ID} is inside the token's scope.", file=sys.stderr)
+              f"Check that {args.repo_id} is inside the token's scope.", file=sys.stderr)
         return 1
 
     info = api.upload_folder(
-        repo_id=REPO_ID,
+        repo_id=args.repo_id,
         folder_path=str(adapter),
         repo_type="model",
         commit_message=args.commit_message,
-        ignore_patterns=IGNORE,
+        ignore_patterns=UPLOAD_IGNORE,
     )
     print(f"[hub] pushed: {info.commit_url if hasattr(info, 'commit_url') else info}")
-    print(f"[hub] https://huggingface.co/{REPO_ID}")
+    api.upload_file(
+        path_or_fileobj=str(MODEL_CARD),
+        path_in_repo="README.md",
+        repo_id=args.repo_id,
+        commit_message=args.commit_message,
+    )
+    print(f"[hub] https://huggingface.co/{args.repo_id}")
     return 0
 
 
