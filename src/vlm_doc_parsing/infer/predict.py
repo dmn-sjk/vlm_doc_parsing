@@ -1,7 +1,7 @@
 """Deliverable 2: load the base Qwen2.5-VL, attach (or merge) the LoRA adapter, feed it a
 document image, print structured JSON, and say whether that JSON actually parses.
 
-    python -m src.infer.predict --adapter $SITE_WORK_DIR/runs/.../final_adapter \
+    python -m vlm_doc_parsing.infer.predict --adapter $SITE_WORK_DIR/runs/.../final_adapter \
         --image receipt.png --merge
 
 `--merge` calls `merge_and_unload()` (faster inference, one dense model, no adapter
@@ -22,7 +22,7 @@ from peft import PeftModel
 from PIL import Image
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
-from src.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION
+from vlm_doc_parsing.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION
 
 # ```json ... ``` fences are the single most common way a VLM breaks json.loads while
 # being otherwise correct. Strip them, but report that we had to (gotcha #5).

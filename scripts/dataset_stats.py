@@ -28,14 +28,14 @@ import sys
 
 from PIL import Image as PILImage
 
-from src.config import Config
-from src.data.resolution import (
+from vlm_doc_parsing.config import Config
+from vlm_doc_parsing.data.resolution import (
     FACTOR,
     build_processor,
     estimate_resized_size,
     estimate_visual_tokens,
 )
-from src.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION, target_json
+from vlm_doc_parsing.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION, target_json
 
 
 def percentiles(values: list[int], qs=(0, 5, 25, 50, 75, 95, 100)) -> dict[int, int]:

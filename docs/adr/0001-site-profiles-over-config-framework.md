@@ -5,8 +5,8 @@ NCCL interfaces, local workarounds) lives in one **Site profile**, a shell file 
 `: "${VAR:=value}"` lines sourced by `scripts/env.sh`. The **Experiment** (YAML configs,
 sbatch job shapes, `src/`) names no site. We chose this over Hydra or a similar framework
 because the site facts are consumed by shell first (sbatch flags, `uv`, NCCL, HF caches
-are all environment variables), and `src/config.py` already separates the experiment from
-the site, apart from one `${VAR}` in `output_dir`.
+are all environment variables), and `src/vlm_doc_parsing/config.py` already separates the
+experiment from the site, apart from one `${VAR}` in `output_dir`.
 
 ## Consequences
 

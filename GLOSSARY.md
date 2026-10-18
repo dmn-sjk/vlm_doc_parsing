@@ -29,3 +29,14 @@ _Avoid_: allocation, resources
 The root under which a **Site** keeps everything large the project writes: runs, adapters,
 caches, the environment.
 _Avoid_: scratch dir, project scratch
+
+**Published run**:
+The one **Experiment** whose adapter is released on the Hub. Frozen: none of its resolved
+values ever change, so a new idea is a new **Experiment**, never an edit to this one.
+_Avoid_: production run, final run, release run
+
+**Short run**:
+A few-step, single-node run of an **Experiment** with its own output location and no
+experiment tracking, required before any multi-node job. It never replaces the
+**Published run**'s adapter.
+_Avoid_: smoke test, smoke job, dry run

@@ -23,10 +23,11 @@ When creating files, follow this layout so the config/orchestration story stays 
 configs/          # accelerate FSDP yaml, training yaml/json configs
   site/           # site profiles: cluster.env (reference), example.env (template)
 slurm/            # sbatch scripts (one per job shape: single-node, multi-node, eval)
-src/
+src/vlm_doc_parsing/  # the installed package (import vlm_doc_parsing.…)
   data/           # dataset loading, chat-template formatting, collators
   train/          # SFTTrainer entrypoint
   infer/          # load base + merge LoRA -> JSON out
+  eval/           # parse-rate and field-accuracy scoring
 scripts/          # env.sh, submit.sh, setup/prefetch, one-off utilities
 md_files/         # project brief and design notes
 ```

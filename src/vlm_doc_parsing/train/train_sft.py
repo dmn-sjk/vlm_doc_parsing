@@ -4,12 +4,12 @@ Run it through `accelerate launch` (see `configs/accelerate_*.yaml` and `slurm/*
 never directly on a login node.
 
     accelerate launch --config_file configs/accelerate_single.yaml \
-        -m src.train.train_sft --config configs/sft_1node.yaml \
+        -m vlm_doc_parsing.train.train_sft --config configs/sft_1node.yaml \
         --set train.max_steps=2 --set 'train.output_dir=${SITE_WORK_DIR}/runs/short' \
         --set train.report_to=none
 
-Everything that defines an experiment lives in the YAML (see `src/config.py`); `--set`
-applies dotted overrides on top so a committed config is never edited in place.
+Everything that defines an experiment lives in the YAML (see `src/vlm_doc_parsing/config.py`);
+`--set` applies dotted overrides on top so a committed config is never edited in place.
 
 Design notes that are *not* obvious and were read out of the installed sources
 (trl 1.12.0 / transformers 5.16.1 / accelerate 1.14.0 / peft 0.20.0) live in
@@ -37,10 +37,10 @@ from transformers import Qwen2_5_VLForConditionalGeneration
 from transformers.trainer_pt_utils import LengthGroupedSampler
 from trl import SFTConfig, SFTTrainer
 
-from src.config import Config, expand_path, load_config
-from src.data.cord import build_datasets
-from src.data.grouping import estimate_lengths
-from src.data.resolution import build_processor
+from vlm_doc_parsing.config import Config, expand_path, load_config
+from vlm_doc_parsing.data.cord import build_datasets
+from vlm_doc_parsing.data.grouping import estimate_lengths
+from vlm_doc_parsing.data.resolution import build_processor
 
 logger = logging.getLogger("train_sft")
 

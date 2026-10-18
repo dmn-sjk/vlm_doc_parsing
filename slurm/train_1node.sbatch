@@ -62,4 +62,4 @@ accelerate launch \
   --config_file configs/accelerate_fsdp.yaml \
   --num_processes "${NPROC}" \
   --num_machines 1 \
-  -m src.train.train_sft --config "${TRAIN_CFG}" "$@"
+  -m vlm_doc_parsing.train.train_sft --config "${TRAIN_CFG}" "$@"

@@ -59,7 +59,7 @@ pyproject.toml, uv.lock   pinned, reproducible environment (uv sync --frozen)
 configs/     accelerate FSDP + single-GPU yaml, training configs (1-node / 2-node)
   site/      site profiles: cluster.env (the published run), example.env (template)
 slurm/       one sbatch per job shape: train_1node, train_multinode, eval
-src/
+src/vlm_doc_parsing/
   config.py  dataclass+YAML contract shared by the data and training halves
   data/      CORD loading, JSON schema, resolution capping, length grouping
   train/     SFTTrainer entrypoint (LoRA, FSDP-safe adapter save)
