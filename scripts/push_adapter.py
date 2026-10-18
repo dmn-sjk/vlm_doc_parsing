@@ -4,11 +4,8 @@
     python scripts/push_adapter.py --adapter $SITE_WORK_DIR/runs/.../final_adapter --dry-run
     python scripts/push_adapter.py --adapter ...                       # the real push
 
-The model card is the hand-written `model_card/model_card.md` in this repo, uploaded as-is
-as `README.md`. Edit that file, not this script, to change what the Hub page says.
-
-The token comes from `HF_TOKEN` in the environment (scripts/env.sh sources the gitignored
-.env). It is never printed and never read in --dry-run mode.
+The token comes from `HF_TOKEN` (scripts/env.sh sources the gitignored .env); it is never
+printed, and --dry-run never reads it.
 """
 
 from __future__ import annotations
@@ -80,7 +77,6 @@ def main(argv: list[str] | None = None) -> int:
     print(f"adapter_config.json: {json.dumps(json.loads((adapter / 'adapter_config.json').read_text()))[:300]}")
 
     if args.dry_run:
-        # Deliberately does NOT read HF_TOKEN, so a dry run can never leak or spend it.
         print("\n[dry-run] nothing was uploaded and no token was read.")
         return 0
 
@@ -99,9 +95,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         api.create_repo(repo_id=args.repo_id, repo_type="model", private=args.private, exist_ok=True)
     except HfHubHTTPError as exc:
-        # repo.write on the user entity covers create_repo in that namespace. A 403 here is
-        # a real permission problem (the token was rotated or rescoped) -- report it rather
-        # than retrying blindly.
         print(f"error: create_repo failed ({exc.response.status_code if exc.response else '?'}). "
               f"Check that {args.repo_id} is inside the token's scope.", file=sys.stderr)
         return 1

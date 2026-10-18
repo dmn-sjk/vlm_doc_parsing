@@ -1,18 +1,13 @@
-"""Score a fine-tuned adapter on CORD-v2, reporting JSON validity separately from content.
+"""Score an adapter on CORD-v2, reporting JSON validity separately from field accuracy.
 
-Gotcha #5: a model that extracts every field correctly but emits a trailing comma is worth
-zero downstream, and a model that emits perfect `{}` scores 100% on "valid JSON". So we
-report three independent numbers:
+A trailing comma scores zero downstream, yet `{}` parses 100% of the time, hence three metrics:
 
-  1. parse_rate      -- fraction of generations that `json.loads` cleanly.
-                        Also reported *strictly* (no markdown-fence repair) and leniently.
-  2. field P/R/F1    -- multiset comparison of flattened (path, value) pairs against the
-                        normalised ground truth. Computed over parseable predictions and,
-                        separately, over all predictions (unparseable == zero credit),
-                        because those two numbers answer different questions.
-  3. norm_edit_sim   -- 1 - normalised Levenshtein distance between the canonicalised JSON
-                        strings. Cheap, and it degrades gracefully when the JSON is broken,
-                        so it is the only one of the three that is defined for every sample.
+  1. parse_rate     -- fraction of generations that `json.loads`: strict (raw) and lenient
+                       (after stripping a markdown fence).
+  2. field P/R/F1   -- multiset match of flattened `path=value` pairs against the gold
+                       target, over parseable predictions and over all (unparseable = 0).
+  3. norm_edit_sim  -- 1 - normalised Levenshtein distance of the canonical JSON strings;
+                       defined even when the JSON is broken.
 
     python -m vlm_doc_parsing.eval.evaluate --config configs/sft_multinode.yaml \
         --adapter $SITE_WORK_DIR/runs/.../final_adapter --split test
@@ -35,26 +30,15 @@ import Levenshtein
 from vlm_doc_parsing.config import load_config
 from vlm_doc_parsing.data.cord import build_datasets
 from vlm_doc_parsing.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION
-from vlm_doc_parsing.infer.predict import (
-    generate_json,
-    load_model_and_processor,
-    parse_json,
-)
+from vlm_doc_parsing.infer.predict import generate_json, load_model_and_processor, parse_json
 
 logger = logging.getLogger(__name__)
-
-
-# --------------------------------------------------------------------------------------
-# Metrics
-# --------------------------------------------------------------------------------------
 
 
 def flatten(obj: Any, prefix: str = "") -> Counter:
     """Flatten nested JSON into a multiset of "path=value" strings.
 
-    List indices are dropped on purpose: CORD receipts are an unordered bag of line items,
-    so `menu[0]` vs `menu[3]` should not count as a miss. Using a Counter rather than a set
-    keeps duplicate line items (two identical drinks) meaningful.
+    List indices are dropped (line items are an unordered bag); a Counter keeps duplicates.
     """
     out: Counter = Counter()
     if isinstance(obj, dict):
@@ -100,16 +84,8 @@ def norm_edit_sim(a: str, b: str) -> float:
 
 
 def gold_from_example(example: dict) -> Any:
-    """Recover the target JSON from a prompt-completion row.
-
-    The completion's assistant turn *is* the training target, so scoring against it is
-    exactly scoring against what the model was taught -- no second normalisation path that
-    could silently drift from Phase 1's.
-    """
+    """The training target itself, so eval can't drift from what the model was taught."""
     return json.loads(example["completion"][-1]["content"])
-
-
-# --------------------------------------------------------------------------------------
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -132,11 +108,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        stream=sys.stdout,
-    )
+    logging.basicConfig(level=logging.INFO, stream=sys.stdout,
+                        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     args = build_parser().parse_args(argv)
 
     cfg = load_config(args.config, args.overrides)
@@ -147,34 +120,29 @@ def main(argv: list[str] | None = None) -> int:
         ds = ds.select(range(min(args.limit, len(ds))))
     logger.info("split=%s n=%d", split, len(ds))
 
-    # Reuse the *inference* loader so eval cannot silently diverge from what predict.py
-    # does; the resolution caps come from the same config the run trained with.
+    # predict's loader, with the resolution caps the run trained with.
     args.min_pixels = cfg.data.min_pixels
     args.max_pixels = cfg.data.max_pixels
     model, processor = load_model_and_processor(args)
 
     n = len(ds)
     strict_ok = lenient_ok = 0
-    parseable = FieldCounts()             # over parseable predictions only
-    overall = FieldCounts()               # over all predictions
+    parseable = FieldCounts()  # parseable predictions only
+    overall = FieldCounts()  # all predictions
     exact = 0
     edit_sims: list[float] = []
     records = []
     t0 = time.time()
 
     for i, example in enumerate(ds):
-        raw = generate_json(
-            model, processor, example["images"][0], SYSTEM_PROMPT, USER_INSTRUCTION,
-            args.max_new_tokens,
-        )
+        image = example["images"][0]
+        raw = generate_json(model, processor, image, SYSTEM_PROMPT, USER_INSTRUCTION, args.max_new_tokens)
         parsed = parse_json(raw)
         gold = gold_from_example(example)
         gold_flat = flatten(gold)
         gold_str = canonical(gold)
 
-        # Strict = json.loads(raw) with no repair at all. Lenient = after stripping a
-        # markdown fence. The gap between the two is the "model is right but formats it in
-        # a code block" failure, which is trivially fixable in a serving layer.
+        # Strict: no repair. Lenient: after stripping a markdown fence.
         strict = False
         try:
             json.loads(raw)
@@ -192,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
             exact += int(pred_str == gold_str)
             edit_sims.append(norm_edit_sim(pred_str, gold_str))
         else:
-            overall.add(Counter(), gold_flat)     # zero credit, full recall penalty
+            overall.add(Counter(), gold_flat)  # zero credit, full recall penalty
             edit_sims.append(norm_edit_sim(raw.strip(), gold_str))
 
         if args.dump_predictions:

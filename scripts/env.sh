@@ -1,23 +1,16 @@
 #!/usr/bin/env bash
-# Shared environment for every entrypoint (login-node scripts and sbatch jobs alike).
-# Source this; do not execute it.
+# Shared environment for every entrypoint, login node and jobs alike. Source it.
 #
-# Precedence: your environment > site profile > the defaults below. No path or cache
-# default overwrites a variable that is already set to a non-empty value (an empty one
-# counts as unset, so `VAR= cmd` cannot clear a profile value). Works with no profile and
-# no $SCRATCH.
+# Precedence: your environment > site profile > the defaults below. An empty variable counts
+# as unset, so `VAR= cmd` cannot clear a profile value.
 
-# Executed rather than sourced, the `return`s below would not stop it.
 (return 0 2>/dev/null) || { echo "error: source scripts/env.sh, do not run it" >&2; exit 1; }
 
-# Derived from this file's location rather than hardcoded. sbatch scripts set PROJ_ROOT
-# themselves (from SLURM_SUBMIT_DIR) before sourcing; either way it is the repo root.
+# sbatch scripts set PROJ_ROOT from SLURM_SUBMIT_DIR before sourcing.
 PROJ_ROOT="${PROJ_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
-# --- site profile: account, partitions, storage, NCCL interfaces (see configs/site/) ---
-# An explicit SITE_ENV must exist: silently falling back to the defaults would put ~16 GB
-# of caches under the repo, which on a quota'd home fills it. Relative paths are taken from
-# the repo root, so the same value works from any cwd and inside jobs.
+# Site profile (configs/site/). An explicit SITE_ENV must exist: falling back to defaults
+# would put ~16 GB of caches under the repo. Relative paths are from the repo root.
 if [ -n "${SITE_ENV:-}" ]; then
   case "${SITE_ENV}" in /*) ;; *) SITE_ENV="${PROJ_ROOT}/${SITE_ENV}" ;; esac
   if [ ! -f "${SITE_ENV}" ]; then
@@ -38,7 +31,7 @@ if [ -f "${SITE_ENV}" ]; then
   set +a
 fi
 
-# --- secrets: .env is gitignored; never echo these ---
+# Secrets: .env is gitignored; never echo these.
 if [ -f "${PROJ_ROOT}/.env" ]; then
   set -a
   # shellcheck disable=SC1091
@@ -46,7 +39,7 @@ if [ -f "${PROJ_ROOT}/.env" ]; then
   set +a
 fi
 
-# --- caches: keep every large writer under the work dir ---
+# Caches: every large writer goes under the work dir.
 : "${SITE_WORK_DIR:=${PROJ_ROOT}/.work}"
 : "${HF_HOME:=${SITE_WORK_DIR}/huggingface}"
 : "${HF_DATASETS_CACHE:=${HF_HOME}/datasets}"
@@ -60,9 +53,7 @@ export TOKENIZERS_PARALLELISM=false
 
 mkdir -p "${HF_DATASETS_CACHE}" "${WANDB_DIR}" "${TRITON_CACHE_DIR}" "${TORCHINDUCTOR_CACHE_DIR}"
 
-# --- venv ---
-# Built by scripts/setup_env.sh from the committed pyproject.toml + uv.lock. uv's own
-# default location unless the site profile moves it (e.g. off a small $HOME).
+# The venv built by scripts/setup_env.sh.
 : "${UV_PROJECT_ENVIRONMENT:=${PROJ_ROOT}/.venv}"
 export UV_PROJECT_ENVIRONMENT
 export PATH="${UV_PROJECT_ENVIRONMENT}/bin:${PATH}"

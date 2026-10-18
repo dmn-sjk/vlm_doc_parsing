@@ -1,66 +1,15 @@
 """Target schema, prompts, and CORD ground-truth normalisation.
 
-The model is trained to emit **one compact JSON object** describing a receipt. Everything
-about that object -- key names, key order, value types, what is omitted -- is decided here
-and nowhere else, so that the string in the system prompt and the string in the training
-target can never drift apart.
+The model emits one compact JSON object per receipt. Key names, key order and omission rules
+live only here, so the system prompt and the training target can't drift apart.
 
-Design decisions
-----------------
+- CORD's shorthand keys are renamed, and its inconsistent shapes (dict-or-list blocks,
+  leaves split into lists across OCR lines) collapse into one fixed schema.
+- Absent fields are omitted, never `null`; key order is canonical, not sorted.
+- Leaves are verbatim strings: receipts mix `.` and `,` thousands separators.
+- Serialised compactly with `ensure_ascii=False` to save tokens.
 
-*Why rename CORD's keys.* Raw CORD ``gt_parse`` uses annotation-tool shorthand (``nm``,
-``cnt``, ``unitprice``, ``menutype_cnt``) and is structurally inconsistent: ``menu`` is a
-bare dict when the receipt has a single line item and a list otherwise, ``sub_total`` is a
-list in exactly one example, and any leaf may be either a string or a list of strings
-(the annotator split a value across two OCR lines). Training on that raw shape teaches the
-model the annotation tool's quirks rather than the extraction task. :func:`normalize_gt`
-collapses all of it into one fixed schema.
-
-*Why omit absent fields instead of emitting ``null``.* Receipts genuinely differ -- 319 of
-the 1000 CORD receipts have no subtotal block at all, and no single receipt carries more
-than a handful of the eight ``total`` sub-fields. Emitting the full key set with ``null``
-padding would roughly triple the target length for no information gain, and would teach
-the model to hallucinate a fixed skeleton. Absent means absent.
-
-*Why canonical key order rather than sorted keys.* Order is fixed by the tables below, so
-the target string is fully deterministic (the requirement), and it matches the order the
-keys are listed in the system prompt, so the model sees prompt and target agree. Alphabetic
-sorting would be equally deterministic but would scramble the natural reading order of a
-receipt (``name`` before ``price``, ``subtotal`` before ``total``).
-
-*Why ``separators=(",", ":")`` and ``ensure_ascii=False``.* Both are pure token savings on
-a target the model must emit at every step of training and inference:
-
-* Compact separators drop the ``", "`` / ``": "`` spaces json.dumps adds by default. On
-  CORD that is ~1 token saved per field, ~40 tokens per receipt.
-* ``ensure_ascii=False`` keeps Indonesian/Korean characters as literal UTF-8 instead of
-  ``\\uXXXX`` escapes. A single escaped CJK character costs ~6 tokens versus ~1-2 for the
-  literal, and the escaped form is far harder for the model to get syntactically right.
-
-No indentation and no trailing newline: the target is exactly the JSON and nothing else,
-so ``json.loads(prediction)`` is a fair pass/fail metric at eval time.
-
-Schema (canonical)
-------------------
-
-.. code-block:: text
-
-    {
-      "menu":      [ <item>, ... ],     # line items, in receipt order
-      "void_menu": [ <item>, ... ],     # voided/cancelled line items (rare)
-      "subtotal":  { subtotal_price, discount_price, service_price,
-                     other_service_price, tax_price, etc },
-      "total":     { total_price, etc, menu_type_count, menu_qty_count,
-                     cash_price, change_price, credit_card_price, emoney_price }
-    }
-
-    <item> = { name, item_no, count, unit_price, price, discount_price,
-               item_subtotal, vat, etc, sub: [ <item>, ... ] }
-
-All leaf values are **strings copied verbatim from the receipt** (``"75,000"``, ``"1 x"``)
--- no numeric parsing, no currency normalisation. The receipts use ``.``/``,`` as thousands
-separators inconsistently, so any numeric coercion would silently corrupt values; keeping
-strings makes exact-match field accuracy a meaningful metric.
+Rationale and the schema diagram: docs/design-notes.md#target-schema.
 """
 
 from __future__ import annotations
@@ -68,11 +17,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-# --------------------------------------------------------------------------------------
-# CORD key -> canonical key. Order of each tuple list *is* the key order in the output.
-# Any CORD key not listed here raises, so a schema change in the data fails loudly rather
-# than silently dropping a field from every training target.
-# --------------------------------------------------------------------------------------
+# CORD key -> canonical key, in output order. An unlisted CORD key raises rather than being
+# silently dropped from every target.
 
 _ITEM_FIELDS: tuple[tuple[str, str], ...] = (
     ("nm", "name"),
@@ -178,22 +124,14 @@ USER_INSTRUCTION = (
 )
 
 
-# --------------------------------------------------------------------------------------
-# Normalisation
-# --------------------------------------------------------------------------------------
-
-
 class SchemaError(ValueError):
     """Raised when CORD ground truth contains a key or shape this schema does not model."""
 
 
 def _scalar(value: Any) -> str | None:
-    """Collapse a CORD leaf into a single trimmed string, or ``None`` if empty.
+    """Collapse a CORD leaf to one trimmed string, or `None` if empty.
 
-    Leaves are usually strings, but the annotation tool emits a *list* of strings when a
-    value was split across OCR lines (observed on ``nm``, ``cnt``, ``price``,
-    ``subtotal_price``, ``tax_price``, ``etc``, ...). Those fragments are re-joined with a
-    single space, which is how they read on the receipt.
+    A value split across OCR lines arrives as a list of strings; re-join it with spaces.
     """
     if value is None:
         return None
@@ -202,7 +140,6 @@ def _scalar(value: Any) -> str | None:
         return " ".join(parts) or None
     if isinstance(value, str):
         return value.strip() or None
-    # ints/floats do not occur in CORD today, but do not lose data if they appear.
     return str(value)
 
 
@@ -216,7 +153,7 @@ def _as_list(value: Any) -> list[Any]:
 
 
 def _merge_dicts(values: list[Any]) -> dict[str, Any]:
-    """Merge a list of dicts left-to-right (``sub_total`` is a list in one example)."""
+    """Merge a list of dicts left-to-right (`sub_total` is a list in one example)."""
     out: dict[str, Any] = {}
     for v in values:
         if not isinstance(v, dict):
@@ -265,21 +202,9 @@ def _normalize_block(raw: Any, fields: tuple[tuple[str, str], ...], name: str) -
 
 
 def normalize_gt(ground_truth: str) -> dict[str, Any]:
-    """Parse a CORD ``ground_truth`` string into the canonical extraction schema.
+    """Parse CORD's `ground_truth` JSON string (its `gt_parse` key) into the canonical schema.
 
-    Args:
-        ground_truth: the raw ``ground_truth`` column of ``naver-clova-ix/cord-v2``, a JSON
-            **string** whose ``"gt_parse"`` key holds the nested receipt annotation. The
-            sibling keys (``meta``, ``valid_line``, ``roi``, ``repeating_symbol``,
-            ``dontcare``) are annotation bookkeeping and are ignored.
-
-    Returns:
-        A dict in canonical key order (see the module docstring). Empty blocks and absent
-        fields are omitted, so ``{}`` is a legal -- if degenerate -- result.
-
-    Raises:
-        SchemaError: if the annotation carries a key this schema does not model. This is
-            deliberate: a silent drop would poison every training target for that field.
+    Empty blocks are omitted, so `{}` is a legal result. An unmodelled key raises SchemaError.
     """
     parsed = json.loads(ground_truth)
     if "gt_parse" not in parsed:
@@ -311,7 +236,6 @@ def normalize_gt(ground_truth: str) -> dict[str, Any]:
         if tot:
             blocks["total"] = tot
 
-    # Re-emit in canonical order so the serialised string is stable.
     return {k: blocks[k] for k in _TOP_LEVEL if k in blocks}
 
 
@@ -321,9 +245,5 @@ def dumps(obj: Any) -> str:
 
 
 def target_json(ground_truth: str) -> str:
-    """The exact assistant target string for one CORD example.
-
-    Compact, UTF-8 literal, canonical key order, no trailing newline -- see the module
-    docstring for why each of those was chosen.
-    """
+    """The exact assistant target string for one CORD example."""
     return dumps(normalize_gt(ground_truth))

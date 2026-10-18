@@ -1,14 +1,8 @@
-"""Dynamic-resolution maths and processor construction for Qwen2.5-VL.
+"""Qwen2.5-VL resolution maths and processor construction.
 
-Visual tokens dominate sequence length for document images, so the resolution cap is the
-single highest-leverage OOM lever (CLAUDE.md gotcha #1). To choose that cap we need to
-predict the visual-token count for ~1000 images *without* running the image processor
-(which decodes, resizes and normalises every image -- far too slow for a histogram sweep,
-and it would blow the login-node memory cgroup).
-
-:func:`estimate_visual_tokens` therefore calls transformers' own ``smart_resize`` and
-applies the token count that ``Qwen2_5_VLProcessor.replace_image_token`` derives from
-``image_grid_thw``. ``scripts/inspect_batch.py`` asserts the two agree on real batches.
+`estimate_visual_tokens` predicts the visual-token count from an image's size alone, with
+transformers' own `smart_resize`, so statistics and length grouping never run the image
+processor. `scripts/inspect_batch.py` asserts it matches real batches.
 """
 
 from __future__ import annotations
@@ -20,36 +14,16 @@ from transformers.models.qwen2_vl.image_processing_qwen2_vl import smart_resize
 
 from vlm_doc_parsing.config import DataConfig
 
-# Qwen2.5-VL ViT geometry, from Qwen2VLImageProcessor class attributes.
+# Qwen2.5-VL ViT geometry; one merged visual token covers FACTOR x FACTOR pixels.
 PATCH_SIZE = 14
 MERGE_SIZE = 2
-#: ``factor`` handed to ``smart_resize`` by the image processor:
-#: ``factor = patch_size * merge_size`` (image_processing_qwen2_vl.py:226, :280).
 FACTOR = PATCH_SIZE * MERGE_SIZE  # 28
 
 
-def estimate_visual_tokens(
-    width: int,
-    height: int,
-    min_pixels: int,
-    max_pixels: int,
-) -> int:
-    """Number of ``<|image_pad|>`` tokens the processor will emit for one image.
+def estimate_visual_tokens(width: int, height: int, min_pixels: int, max_pixels: int) -> int:
+    """`<|image_pad|>` tokens the processor emits for one image, excluding the two delimiters.
 
-    Args:
-        width: original image width in pixels.
-        height: original image height in pixels.
-        min_pixels: lower bound on post-resize pixel count (``size.shortest_edge``).
-        max_pixels: upper bound on post-resize pixel count (``size.longest_edge``).
-
-    Returns:
-        The merged visual-token count, i.e. ``grid_h * grid_w // merge_size**2``, which is
-        exactly ``(resized_h // 28) * (resized_w // 28)``. This does **not** include the
-        two ``<|vision_start|>`` / ``<|vision_end|>`` delimiters.
-
-    Note the argument order is ``(width, height)`` here but ``(height, width)`` in
-    :func:`smart_resize`, matching the respective upstream conventions. PIL's ``.size`` is
-    ``(width, height)``, which is what callers have.
+    Takes `(width, height)` like PIL's `.size`; `smart_resize` takes `(height, width)`.
     """
     resized_h, resized_w = smart_resize(
         height, width, factor=FACTOR, min_pixels=min_pixels, max_pixels=max_pixels
@@ -59,10 +33,8 @@ def estimate_visual_tokens(
     return (grid_h * grid_w) // (MERGE_SIZE**2)
 
 
-def estimate_resized_size(
-    width: int, height: int, min_pixels: int, max_pixels: int
-) -> tuple[int, int]:
-    """``(width, height)`` the processor will resize this image to. Useful for stats."""
+def estimate_resized_size(width: int, height: int, min_pixels: int, max_pixels: int) -> tuple[int, int]:
+    """`(width, height)` the processor resizes this image to."""
     resized_h, resized_w = smart_resize(
         height, width, factor=FACTOR, min_pixels=min_pixels, max_pixels=max_pixels
     )
@@ -70,29 +42,12 @@ def estimate_resized_size(
 
 
 def build_processor(cfg: DataConfig, model_id: str, **kwargs: Any) -> ProcessorMixin:
-    """Load the Qwen2.5-VL processor with the resolution caps from :class:`DataConfig`.
+    """Load the processor with the DataConfig pixel caps; `kwargs` go to `from_pretrained`.
 
-    ``model_id`` is ``ModelConfig.base_model`` (``DataConfig`` does not carry it);
-    ``kwargs`` go to ``AutoProcessor.from_pretrained``.
-
-    Where the pixel caps go, verified against transformers 5.16.1:
-
-    * ``Qwen2VLImageProcessor.__init__`` pops ``min_pixels`` / ``max_pixels`` and folds
-      them into ``size = {"shortest_edge": min_pixels, "longest_edge": max_pixels}``
-      (image_processing_qwen2_vl.py:110-118), so passing them straight to
-      ``AutoProcessor.from_pretrained`` is the supported path and it does take effect --
-      confirmed by reading back ``processor.image_processor.size``.
-    * ``_standardize_kwargs`` only rebuilds the ``SizeDict`` when **both** are supplied
-      (:120-129). Passing ``max_pixels`` alone as a per-call kwarg is silently ignored.
-      Always pass the pair.
-    * The checkpoint ships ``min_pixels=3136`` / ``max_pixels=12845056`` (16384 visual
-      tokens!). Not overriding these is an instant OOM, hence the assertion below.
-
-    ``tokenizer.padding_side`` is left alone on purpose: TRL's vision collator passes an
-    explicit ``padding_side`` on every call (``"left"`` for the prompt half, ``"right"``
-    for the completion half, sft_trainer.py:718/725), so the attribute is never consulted
-    during training. Setting it here would only create a misleading impression that it
-    matters. Inference code that batches generation should set ``"left"`` itself.
+    Both caps are passed together (one alone as a per-call kwarg is silently ignored) and read
+    back, because the checkpoint's own `max_pixels` is 16384 visual tokens: an instant OOM.
+    `padding_side` is left alone: the training collator sets it per call; batched inference
+    must set "left".
     """
     min_pixels = int(cfg.min_pixels)
     max_pixels = int(cfg.max_pixels)

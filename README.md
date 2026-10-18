@@ -58,7 +58,7 @@ Training the released adapter took **14.4 minutes** on 1 node × 8 A100: 800 exa
 pyproject.toml, uv.lock   pinned, reproducible environment (uv sync --frozen)
 configs/     accelerate FSDP + single-GPU yaml, training configs (1-node / 2-node)
   site/      site profiles: cluster.env (the published run), example.env (template)
-slurm/       one sbatch per job shape: train_1node, train_multinode, eval
+slurm/       one sbatch per job shape: train_1node, train_multinode, eval; launch_node.sh (per-node launcher)
 src/vlm_doc_parsing/
   config.py  dataclass+YAML contract shared by the data and training halves
   data/      CORD loading, JSON schema, resolution capping, length grouping
@@ -120,9 +120,9 @@ on smaller GPUs, lower `data.max_pixels` or the per-device batch with `--set`.
 
 ## Engineering notes
 
-The genuinely hard parts, each verified rather than assumed:
+The hard parts:
 
-- **Loss masking is verified, not trusted.** TRL *rejects* `assistant_only_loss` for vision
+- **Loss masking is checked by decoding.** TRL *rejects* `assistant_only_loss` for vision
   datasets, so answer-only loss requires the **prompt-completion** format with
   `completion_only_loss=True`. `scripts/inspect_batch.py` decodes a real batch and asserts
   the unmasked span is byte-exactly the target JSON, that image/prompt tokens are `-100`,
@@ -135,8 +135,8 @@ The genuinely hard parts, each verified rather than assumed:
 - **`loss_type="chunked_nll"` raises if `lm_head` is wrapped by a PEFT adapter**, which
   constrains the LoRA target list.
 - **FSDP + LoRA + a frozen ViT** needs `use_orig_params=True`, and the auto-wrap policy must
-  name the real `Qwen2_5_VLDecoderLayer` *and* `Qwen2_5_VLVisionBlock` — read out of the
-  installed `modeling_qwen2_5_vl.py`, not recalled. An `exclude_modules` regex keeps
+  name the real `Qwen2_5_VLDecoderLayer` *and* `Qwen2_5_VLVisionBlock` (the model's own
+  `_no_split_modules`). An `exclude_modules` regex keeps
   `gate/up/down_proj` from matching 96 modules inside the frozen vision tower.
 - **Adapter saving under FSDP is collective.** `save_model` must be entered by every rank
   (it all-gathers a `FULL_STATE_DICT`); calling `save_pretrained` on rank 0 alone hangs or
@@ -160,16 +160,16 @@ torch 2.11.0+cu128   transformers 5.16.1   trl 1.12.0
 peft 0.20.0          accelerate 1.14.0     datasets 4.8.5     Python 3.12
 ```
 
-Two deliberate choices in `pyproject.toml`:
+Two choices in `pyproject.toml`:
 
 - **`torch`/`torchvision` come from the pinned `download.pytorch.org/whl/cu128` index**, not
   PyPI, so a sync cannot silently install a build with a different CUDA runtime.
 - **`exclude-newer` freezes the resolution horizon** to the date the trained environment was
   built. Without it, re-locking pulls newer transitive patch releases and the lock stops
-  reproducing the environment that produced the published adapter. Raise it deliberately
-  when upgrading, and re-run the 5-step short run afterwards.
+  reproducing the environment that produced the published adapter. Raise it only when
+  upgrading, and re-run the 5-step Short run afterwards.
 
-Direct dependency versions are pinned rather than floated on purpose: several behaviours
+Direct dependency versions are pinned, not floated: several behaviours
 this project relies on are version-specific (prompt-completion masking for vision datasets,
 `chunked_nll` rejecting a PEFT-wrapped `lm_head`, the vision collator's key set), so a
 resolver free to pick newer wheels would change training semantics silently.

@@ -1,13 +1,6 @@
 #!/usr/bin/env bash
-# Reproduce the project environment from pyproject.toml + uv.lock.
-#
-# Run on a LOGIN NODE: compute nodes have no reliable outbound internet, and the venv is
-# ~7 GB of wheels.
-#
-# The venv goes wherever UV_PROJECT_ENVIRONMENT points: uv's default `.venv` next to
-# pyproject.toml unless the site profile moves it (configs/site/cluster.env puts it on
-# purged scratch storage). If it disappears, this script rebuilds it byte-identically from
-# uv.lock, which is the reason the lock is committed.
+# Build the venv (at UV_PROJECT_ENVIRONMENT) exactly from uv.lock. Run on a login node:
+# compute nodes may have no outbound internet, and the venv is ~7 GB of wheels.
 set -euo pipefail
 
 # shellcheck disable=SC1091
@@ -22,9 +15,7 @@ command -v uv >/dev/null || { echo "uv not on PATH (expected ~/.local/bin/uv)"; 
 
 cd "${PROJ_ROOT}"
 
-# --frozen: install exactly what uv.lock says and fail rather than silently re-resolving.
-# Reproducibility is the whole point -- several behaviours this project depends on are
-# version-specific (see the comment in pyproject.toml).
+# --frozen: fail rather than re-resolve; training behaviour depends on the pinned versions.
 uv sync --frozen --no-dev "$@"
 
 echo

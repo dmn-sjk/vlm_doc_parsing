@@ -1,9 +1,6 @@
 #!/bin/bash
 # Evaluation: 1 GPU, generate JSON for a held-out split and score it.
 # Usage: sbatch slurm/eval.sbatch <adapter_dir> [extra args for vlm_doc_parsing.eval.evaluate]
-# Account/partition are deliberately not set here: scripts/submit.sh passes them from the
-# site profile, or pass `sbatch -A <acct> -p <part>` / set SBATCH_ACCOUNT, SBATCH_PARTITION
-# (precedence per `man sbatch`: CLI > SBATCH_* env > #SBATCH).
 #SBATCH --job-name=vlm-eval
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -16,7 +13,7 @@
 
 set -euo pipefail
 
-# Inside a job $0 is a copy in SLURM's spool dir, so the repo is found via the submit dir.
+# $0 is a spool copy inside a job, so find the repo via the submit dir.
 PROJ_ROOT="${PROJ_ROOT:-${SLURM_SUBMIT_DIR:?}}"
 cd "$PROJ_ROOT"
 [ -f pyproject.toml ] || { echo "error: ${PROJ_ROOT} is not the repo root; submit from the repository root" >&2; exit 1; }
@@ -27,10 +24,9 @@ export HF_HUB_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 export WANDB_MODE=disabled
 export PYTHONUNBUFFERED=1
-export OMP_NUM_THREADS=8         # one process; matches the value the published eval used
+export OMP_NUM_THREADS=8         # one process; the published eval's value
 
-# Pass the literal string "base" to score the un-finetuned checkpoint. A fine-tuned score
-# in isolation is uninterpretable -- the baseline is what turns it into a claim.
+# "base" scores the un-finetuned checkpoint, the baseline every adapter score needs.
 ADAPTER="${1:?usage: sbatch slurm/eval.sbatch <adapter_dir|base> [args...]}"
 shift || true
 
@@ -45,8 +41,7 @@ fi
 echo "host=$(hostname) job=${SLURM_JOB_ID} adapter=${ADAPTER}"
 nvidia-smi --query-gpu=index,name,memory.total --format=csv
 
-# Single process, no accelerate launcher: generation is sequential and the merged 7B fits
-# on one A100. Sharding it would only add all-gather latency per token.
+# One process: the 7B fits on one A100, and sharding would add all-gather latency per token.
 python -m vlm_doc_parsing.eval.evaluate \
   --config "${EVAL_CFG:-configs/sft_1node.yaml}" \
   "${ADAPTER_ARGS[@]}" \

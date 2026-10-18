@@ -28,10 +28,8 @@ model:
     alpha: 64            # alpha = 2r, the usual scaling for r >= 16
     dropout: 0.05
     bias: none
-    # Text-decoder attention + MLP only: 28 layers x 7 projections = 196 modules,
-    # 80.7 M trainable params. The ViT's own MLP also has gate/up/down_proj, so these
-    # names would match 96 modules inside the frozen vision tower -- train_sft.py adds
-    # exclude_modules=r"model\.visual\..*" when adapt_vision_tower is false.
+    # Text decoder only: 28 layers x 7 = 196 modules, 80.7 M params. The ViT's MLP has the
+    # same names; train_sft excludes it while adapt_vision_tower is false.
     target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
     adapt_vision_tower: false
     modules_to_save: []  # must stay empty: lm_head in here breaks loss_type=chunked_nll
@@ -40,10 +38,8 @@ train:
   output_dir: ${SITE_WORK_DIR}/runs/cord-lora-1n8g
   run_name: qwen25vl-cord-lora-1n8g
 
-  # 8 ranks x 2 per device x 2 accumulation = global batch 32 -- identical optimisation
-  # trajectory to the 2-node shape, just half the ranks doing twice the work.
+  # 8 ranks x 2 per device x 2 accumulation = global batch 32, as in the 2-node shape.
   # 800 / 32 = 25 optimizer steps per epoch; 3 epochs = 75 steps.
-  # A100 here is the 40 GB SXM4 part, NOT 80 GB -- verified by nvidia-smi on t0006/t0011.
   num_train_epochs: 3.0
   max_steps: -1
   per_device_train_batch_size: 2
@@ -65,7 +61,7 @@ train:
 
   bf16: true
   seed: 42
-  report_to: wandb       # WANDB_PROJECT is exported by the sbatch script, never in code
+  report_to: wandb       # WANDB_PROJECT is set in the sbatch script
   loss_type: chunked_nll
   completion_only_loss: true
   packing: false

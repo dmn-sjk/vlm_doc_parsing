@@ -1,14 +1,8 @@
 #!/usr/bin/env python
-"""Verify a real collated batch: image-token count, loss mask, and decoded spans.
+"""Check a real collated batch: image-token count, loss mask, and decoded spans.
 
-CLAUDE.md gotcha #3: "Loss masking must be verified, not assumed." TRL's vision collator
-deliberately leaves vision tokens unmasked in ``labels`` and lets the model deal with them
-(``trl/trainer/sft_trainer.py:686-688``), so nothing in the stack will tell you if the
-prompt is leaking into the loss -- the training curve will just look plausible and wrong.
-
-This script builds a batch with **the same collator class SFTTrainer instantiates for a
-vision dataset** (``DataCollatorForVisionLanguageModeling``, chosen at ``:1221``) and
-asserts, per example:
+A prompt leaking into the loss still gives a plausible training curve, so this builds a batch
+with the collator SFTTrainer uses for vision datasets and asserts, per example:
 
 1. the number of ``<|image_pad|>`` tokens in ``input_ids`` equals what the image processor
    actually produced (``image_grid_thw.prod() // merge_size**2``), and equals what
@@ -19,8 +13,8 @@ asserts, per example:
 3. every position before that span -- system prompt, instruction, vision tokens, padding --
    is ``-100``;
 4. nothing was truncated away by ``max_length``;
-5. ``vlm_doc_parsing.data.grouping.estimate_lengths`` -- the length signal Phase 2 feeds to
-   the length-grouped sampler -- equals the real unpadded sequence length.
+5. ``vlm_doc_parsing.data.grouping.estimate_lengths`` -- the length-grouped sampler's
+   signal -- equals the real unpadded sequence length.
 
 Exits non-zero on any failure.
 
@@ -40,7 +34,10 @@ import sys
 from pathlib import Path
 
 import torch
+from datasets import Image as HFImage
+from datasets import List as HFList
 from PIL import Image as PILImage
+from trl.trainer.sft_trainer import DataCollatorForVisionLanguageModeling
 
 from vlm_doc_parsing.config import load_config
 from vlm_doc_parsing.data.cord import build_datasets
@@ -76,8 +73,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num-batches", type=int, default=2)
     p.add_argument("--model-id", default=None, help="defaults to the config's model.base_model")
     p.add_argument("--num-proc", type=int, default=2,
-                   help="dataset map workers; kept low because this is meant to run on "
-                        "the login node, whose memory cgroup SIGKILLs greedy processes")
+                   help="dataset map workers; kept low for a login node's memory limit")
     p.add_argument("--quiet", action="store_true", help="skip the human-readable dumps")
     return p.parse_args()
 
@@ -88,7 +84,6 @@ def main() -> int:
     cfg = load_config(args.config, args.override)
     model_id = args.model_id or cfg.model.base_model
 
-    # Only inspect as many examples as we need; keeps the login-node footprint tiny.
     wanted = args.batch_size * args.num_batches
     cfg.data.max_train_samples = wanted
     cfg.data.max_eval_samples = wanted
@@ -102,15 +97,11 @@ def main() -> int:
     datasets = build_datasets(cfg.data, processor=processor, model_id=model_id)
     ds = datasets[args.split]
 
-    # The length signal Phase 2 will hand to the length-grouped sampler. Asserted against
-    # the real collated length below, so a drift in either direction is caught here.
     est_lengths = estimate_lengths(
         ds, processor, min_pixels=cfg.data.min_pixels, max_pixels=cfg.data.max_pixels
     )
 
-    # Exactly what SFTTrainer builds for a vision dataset (sft_trainer.py:1221).
-    from trl.trainer.sft_trainer import DataCollatorForVisionLanguageModeling
-
+    # What SFTTrainer builds for a vision dataset.
     collator = DataCollatorForVisionLanguageModeling(
         processor=processor,
         max_length=cfg.data.max_length,
@@ -131,10 +122,7 @@ def main() -> int:
         if lo >= hi:
             break
 
-        # Raw image sizes, read from the compressed header, for the independent
-        # estimate_visual_tokens cross-check.
-        from datasets import Image as HFImage, List as HFList
-
+        # Raw sizes from the image headers, for the estimate_visual_tokens cross-check.
         undecoded = ds.cast_column("images", HFList(HFImage(decode=False)))
         raw_sizes = []
         for i in range(lo, hi):
@@ -145,8 +133,6 @@ def main() -> int:
             raw_sizes.append(sizes)
 
         examples = [ds[i] for i in range(lo, hi)]
-        # The target string as `vlm_doc_parsing.data.schema.target_json` produced it, read back
-        # off the dataset so the assertion compares against what is actually stored.
         targets = [ex["completion"][0]["content"] for ex in examples]
 
         batch = collator(examples)
@@ -169,7 +155,7 @@ def main() -> int:
             checked += 1
 
             try:
-                # -- 1. image placeholder accounting -------------------------------------
+                # 1. image placeholder accounting
                 n_images = len(raw_sizes[row])
                 expected_from_processor = 0
                 expected_from_estimator = 0
@@ -193,11 +179,10 @@ def main() -> int:
                     expected_from_estimator == expected_from_processor,
                     f"row {idx}: estimate_visual_tokens said {expected_from_estimator} but "
                     f"the processor produced {expected_from_processor} for sizes "
-                    f"{raw_sizes[row]} -- src/vlm_doc_parsing/data/resolution.py is out of "
-                    f"sync with transformers' smart_resize",
+                    f"{raw_sizes[row]}: resolution.py is out of sync with smart_resize",
                 )
 
-                # -- 2. the unmasked span is exactly the completion ----------------------
+                # 2. the unmasked span is exactly the completion
                 unmasked = (lab != -100)
                 _check(bool(unmasked.any()), f"row {idx}: no unmasked label positions at all")
                 pos = unmasked.nonzero(as_tuple=True)[0]
@@ -220,14 +205,13 @@ def main() -> int:
                     f"        expected: {target + eot!r}\n"
                     f"        got:      {decoded_raw!r}",
                 )
-                # The end-of-turn token must be inside the loss, or the model never learns
-                # to stop generating.
+                # Without the end-of-turn token in the loss the model never learns to stop.
                 _check(
                     int(ids[end - 1]) == tokenizer.eos_token_id,
                     f"row {idx}: assistant end-of-turn token is not inside the loss span",
                 )
 
-                # -- 3. everything before the completion is masked -----------------------
+                # 3. everything before the completion is masked
                 _check(
                     bool((lab[:start] == -100).all()),
                     f"row {idx}: {int((lab[:start] != -100).sum())} unmasked positions "
@@ -248,7 +232,7 @@ def main() -> int:
                     f"row {idx}: padding positions are unmasked in labels",
                 )
 
-                # -- 4. nothing was truncated -------------------------------------------
+                # 4. nothing was truncated
                 real_len = int(attention_mask[row].sum())
                 _check(
                     collator.max_length is None or real_len <= collator.max_length,
@@ -260,7 +244,7 @@ def main() -> int:
                     f"row {idx}: sequence appears truncated mid-completion",
                 )
 
-                # -- 5. the grouping length signal is exact ------------------------------
+                # 5. the grouping length signal is exact
                 _check(
                     est_lengths[idx] == real_len,
                     f"row {idx}: estimate_lengths said {est_lengths[idx]} but the collated "

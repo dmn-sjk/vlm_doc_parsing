@@ -10,8 +10,7 @@ For each split, prints
     budget and what fraction of examples ``build_datasets`` would drop for exceeding
     ``max_length``.
 
-No image is decoded and the model weights are never loaded, so this is safe to run on the
-login node.
+Decodes no image and loads no model weights, so it runs on a login node.
 
 Usage::
 
@@ -28,7 +27,9 @@ import io
 import sys
 from pathlib import Path
 
+from datasets import Image, load_dataset
 from PIL import Image as PILImage
+from trl.data_utils import apply_chat_template, prepare_multimodal_messages
 
 from vlm_doc_parsing.config import load_config
 from vlm_doc_parsing.data.resolution import (
@@ -97,12 +98,8 @@ def main() -> int:
     processor = build_processor(data, model_id=args.model_id or cfg.model.base_model)
     tokenizer = processor.tokenizer
 
-    # The prompt half is identical for every example, so its token cost is a constant we
-    # can measure once and add to every estimate. Rendered through the real chat template,
-    # with the single <|image_pad|> placeholder discounted (the processor expands it into
-    # `visual` copies).
-    from trl.data_utils import apply_chat_template, prepare_multimodal_messages
-
+    # The prompt is the same for every example: measure it once through the chat template,
+    # minus the one <|image_pad|> placeholder the processor expands.
     probe = {
         "prompt": prepare_multimodal_messages(
             [
@@ -119,7 +116,7 @@ def main() -> int:
     prompt_overhead = (
         len(tokenizer(rendered["prompt"], add_special_tokens=False)["input_ids"]) - 1
     )
-    # The assistant turn wrapper (<|im_end|>\n) that every completion carries.
+    # <|im_end|>\n closing every completion.
     completion_overhead = len(
         tokenizer(rendered["completion"], add_special_tokens=False)["input_ids"]
     )
@@ -134,8 +131,6 @@ def main() -> int:
     print(f"prompt overhead  : {prompt_overhead} tokens (system + instruction + chat "
           f"template, excluding visual tokens)")
     print(f"completion wrap  : {completion_overhead} tokens (<|im_end|>\\n)")
-
-    from datasets import Image, load_dataset
 
     raw = load_dataset(data.dataset_id)
 
