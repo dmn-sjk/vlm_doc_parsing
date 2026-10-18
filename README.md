@@ -67,7 +67,7 @@ src/vlm_doc_parsing/
   eval/      parse-rate and field-F1 scoring
 scripts/     env.sh, submit.sh, setup_env.sh, prefetch.sh, dataset_stats.py, inspect_batch.py, push_adapter.py
 model_card/  model_card.md, uploaded verbatim as the Hub README by push_adapter.py
-md_files/    PROJECT brief, PHASE1/PHASE2 design notes, PROGRESS engineering log
+docs/        project brief, design notes, run log, ADRs
 ```
 
 ## Reproduce
@@ -147,7 +147,8 @@ The genuinely hard parts, each verified rather than assumed:
   `PartialState().main_process_first()`. Invisible to single-GPU testing — the smoke test
   passed twice while the 8-rank run could not survive a minute.
 
-`md_files/PROGRESS.md` is the full log, including the runs that failed and why.
+`docs/run-log.md` records every run, including the ones that failed and why; the design
+reasoning is in `docs/design-notes.md`.
 
 ## Environment
 

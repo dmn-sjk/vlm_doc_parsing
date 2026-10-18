@@ -1,3 +1,6 @@
+> **Note:** the dataset named below (`Glazkov/qwen2.5-vl-table-extraction`) does not exist on
+> the Hub. This project uses `naver-clova-ix/cord-v2` (receipts) instead.
+
 # Distributed Fine-Tuning of Qwen2.5-VL for Structured Document Parsing
 
 **Project Status:** Active / Portfolio Template

@@ -8,8 +8,8 @@ Distributed fine-tuning of **Qwen2.5-VL (7B)** to extract **structured JSON** fr
 documents (tables, invoices, schematics). Training runs on a **multi-node SLURM cluster**
 using TRL's `SFTTrainer` with **FSDP** (via Accelerate) and **LoRA** adapters.
 
-The full brief lives in `md_files/PROJECT.md` — read it before making architectural
-decisions. This file covers *how to work here*; `PROJECT.md` covers *what we're building*.
+The full brief lives in `docs/project-brief.md` — read it before making architectural
+decisions. This file covers *how to work here*; the brief covers *what we're building*.
 
 Deliverables: a LoRA adapter on the HF Hub, a clean inference script, and the SLURM +
 Accelerate configs that made it reproducible. The HPC orchestration is a first-class
@@ -29,7 +29,7 @@ src/vlm_doc_parsing/  # the installed package (import vlm_doc_parsing.…)
   infer/          # load base + merge LoRA -> JSON out
   eval/           # parse-rate and field-accuracy scoring
 scripts/          # env.sh, submit.sh, setup/prefetch, one-off utilities
-md_files/         # project brief and design notes
+docs/             # project brief, design notes, run log, ADRs (docs/adr/)
 ```
 
 ## Environment (any SLURM cluster or GPU workstation)
@@ -49,6 +49,8 @@ md_files/         # project brief and design notes
 
 ## Working conventions
 
+- `configs/sft_1node.yaml` is the Published run: never change its values; a new
+  experiment gets a new YAML.
 - **Short run before scale.** Any change to data pipeline, trainer config or pinned
   dependencies gets a 5-step single-node run before a multi-node job is submitted.
   Multi-node OOMs 40 minutes into a queue wait are the expensive failure mode. A short run
