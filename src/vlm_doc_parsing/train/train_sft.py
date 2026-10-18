@@ -10,6 +10,8 @@ never directly on a login node.
 
 Everything that defines an experiment lives in the YAML (see `src/vlm_doc_parsing/config.py`);
 `--set` applies dotted overrides on top so a committed config is never edited in place.
+
+Design reasoning and library citations live in `docs/design-notes.md`.
 """
 
 from __future__ import annotations

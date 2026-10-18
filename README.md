@@ -67,6 +67,7 @@ src/vlm_doc_parsing/
   eval/      parse-rate and field-F1 scoring
 scripts/     env.sh, submit.sh, setup_env.sh, prefetch.sh, dataset_stats.py, inspect_batch.py, push_adapter.py
 model_card/  model_card.md, uploaded verbatim as the Hub README by push_adapter.py
+docs/        design notes
 ```
 
 ## Reproduce
@@ -144,6 +145,8 @@ The genuinely hard parts, each verified rather than assumed:
   content fingerprint, so all ranks race for one path. Fixed with
   `PartialState().main_process_first()`. Invisible to single-GPU testing — the smoke test
   passed twice while the 8-rank run could not survive a minute.
+
+The design reasoning is in `docs/design-notes.md`.
 
 ## Environment
 
