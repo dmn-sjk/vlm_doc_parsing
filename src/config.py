@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -164,11 +165,14 @@ def _deep_update(base: dict, other: dict) -> dict:
     return out
 
 
-def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Config:
-    """Load a YAML config. `overrides` is a nested dict merged on top (CLI wins)."""
-    raw = yaml.safe_load(Path(path).read_text()) or {}
-    if overrides:
-        raw = _deep_update(raw, overrides)
+def load_config(path: str | Path | None, overrides: Iterable[str] = ()) -> Config:
+    """Load a YAML config (or the defaults when `path` is None), then deep-merge each
+    `KEY.PATH=VALUE` override on top, in order (CLI wins)."""
+    raw = {}
+    if path is not None:
+        raw = yaml.safe_load(Path(path).read_text()) or {}
+    for item in overrides:
+        raw = _deep_update(raw, parse_override(item))
     return _from_dict(Config, raw)
 
 

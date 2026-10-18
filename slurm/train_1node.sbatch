@@ -63,5 +63,3 @@ accelerate launch \
   --num_processes "${NPROC}" \
   --num_machines 1 \
   -m src.train.train_sft --config "${TRAIN_CFG}" "$@"
-
-echo "train job ${SLURM_JOB_ID} finished with status $?"

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -25,25 +24,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-DEFAULT_SYSTEM_PROMPT = (
-    "You are a document parsing engine. Read the document image and return ONLY a JSON "
-    "object. Emit no prose and no markdown fences."
-)
-DEFAULT_INSTRUCTION = "Extract the structured data from this document as JSON."
+from src.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION  # noqa: E402
 
 # ```json ... ``` fences are the single most common way a VLM breaks json.loads while
 # being otherwise correct. Strip them, but report that we had to (gotcha #5).
 _FENCE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
-
-
-def load_prompt_texts() -> tuple[str, str]:
-    """Use Phase 1's prompts when available so inference matches training exactly."""
-    try:
-        from src.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION  # type: ignore
-
-        return SYSTEM_PROMPT, USER_INSTRUCTION
-    except Exception:
-        return DEFAULT_SYSTEM_PROMPT, DEFAULT_INSTRUCTION
 
 
 # --------------------------------------------------------------------------------------
@@ -211,9 +196,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    sys_prompt, instruction = load_prompt_texts()
-    sys_prompt = args.system_prompt or sys_prompt
-    instruction = args.instruction or instruction
+    sys_prompt = args.system_prompt or SYSTEM_PROMPT
+    instruction = args.instruction or USER_INSTRUCTION
 
     image = load_image(args.image, args.page)
     print(f"[input] {args.image} {image.size[0]}x{image.size[1]}", flush=True)

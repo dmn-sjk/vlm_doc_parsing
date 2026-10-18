@@ -32,11 +32,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from src.config import load_config, parse_override  # noqa: E402
+from src.config import load_config  # noqa: E402
+from src.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION  # noqa: E402
 from src.infer.predict import (  # noqa: E402
     generate_json,
     load_model_and_processor,
-    load_prompt_texts,
     parse_json,
 )
 
@@ -123,10 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
-    merged: dict[str, Any] = {}
-    for item in args.overrides:
-        merged.update(parse_override(item))
-    cfg = load_config(args.config, merged or None)
+    cfg = load_config(args.config, args.overrides)
 
     from src.data.cord import build_datasets  # Phase 1
 
@@ -141,7 +138,6 @@ def main(argv: list[str] | None = None) -> int:
     args.min_pixels = cfg.data.min_pixels
     args.max_pixels = cfg.data.max_pixels
     model, processor = load_model_and_processor(args)
-    sys_prompt, instruction = load_prompt_texts()
 
     n = len(ds)
     strict_ok = lenient_ok = 0
@@ -154,7 +150,8 @@ def main(argv: list[str] | None = None) -> int:
 
     for i, example in enumerate(ds):
         raw = generate_json(
-            model, processor, example["images"][0], sys_prompt, instruction, args.max_new_tokens
+            model, processor, example["images"][0], SYSTEM_PROMPT, USER_INSTRUCTION,
+            args.max_new_tokens,
         )
         parsed = parse_json(raw)
         gold = gold_from_example(example)
