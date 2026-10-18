@@ -62,18 +62,34 @@ def _check(ok: bool, message: str) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--config", default=str(DEFAULT_CONFIG),
-                   help="YAML config (see vlm_doc_parsing.config)")
-    p.add_argument("-o", "--override", action="append", default=[],
-                   help="config override, e.g. -o data.max_pixels=802816 (repeatable)")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "--config", default=str(DEFAULT_CONFIG), help="YAML config (see vlm_doc_parsing.config)"
+    )
+    p.add_argument(
+        "-o",
+        "--override",
+        action="append",
+        default=[],
+        help="config override, e.g. -o data.max_pixels=802816 (repeatable)",
+    )
     p.add_argument("--split", default="validation", choices=["train", "validation", "test"])
-    p.add_argument("--batch-size", type=int, default=2,
-                   help="examples per batch; >1 exercises the padding / flush_left path")
+    p.add_argument(
+        "--batch-size",
+        type=int,
+        default=2,
+        help="examples per batch; >1 exercises the padding / flush_left path",
+    )
     p.add_argument("--num-batches", type=int, default=2)
     p.add_argument("--model-id", default=None, help="defaults to the config's model.base_model")
-    p.add_argument("--num-proc", type=int, default=2,
-                   help="dataset map workers; kept low for a login node's memory limit")
+    p.add_argument(
+        "--num-proc",
+        type=int,
+        default=2,
+        help="dataset map workers; kept low for a login node's memory limit",
+    )
     p.add_argument("--quiet", action="store_true", help="skip the human-readable dumps")
     return p.parse_args()
 
@@ -92,7 +108,7 @@ def main() -> int:
     processor = build_processor(cfg.data, model_id=model_id)
     tokenizer = processor.tokenizer
     image_token_id = processor.image_token_id
-    merge_length = processor.image_processor.merge_size ** 2
+    merge_length = processor.image_processor.merge_size**2
 
     datasets = build_datasets(cfg.data, processor=processor, model_id=model_id)
     ds = datasets[args.split]
@@ -109,8 +125,10 @@ def main() -> int:
         pad_to_multiple_of=None,  # raises NotImplementedError for prompt-completion data
         dataset_text_field="text",
     )
-    print(f"collator: {type(collator).__name__} "
-          f"(completion_only_loss={collator.completion_only_loss}, max_length={collator.max_length})")
+    print(
+        f"collator: {type(collator).__name__} "
+        f"(completion_only_loss={collator.completion_only_loss}, max_length={collator.max_length})"
+    )
     print(f"processor: {type(processor).__name__} size={processor.image_processor.size}")
     print(f"split={args.split} n={len(ds)} batch_size={args.batch_size}\n")
 
@@ -143,8 +161,10 @@ def main() -> int:
         grid = batch["image_grid_thw"]
 
         print(f"--- batch {b} --- keys={sorted(batch.keys())}")
-        print(f"    input_ids {tuple(input_ids.shape)}  labels {tuple(labels.shape)}  "
-              f"pixel_values {tuple(batch['pixel_values'].shape)}  image_grid_thw {grid.tolist()}")
+        print(
+            f"    input_ids {tuple(input_ids.shape)}  labels {tuple(labels.shape)}  "
+            f"pixel_values {tuple(batch['pixel_values'].shape)}  image_grid_thw {grid.tolist()}"
+        )
 
         grid_ptr = 0
         for row in range(input_ids.shape[0]):
@@ -183,7 +203,7 @@ def main() -> int:
                 )
 
                 # 2. the unmasked span is exactly the completion
-                unmasked = (lab != -100)
+                unmasked = lab != -100
                 _check(bool(unmasked.any()), f"row {idx}: no unmasked label positions at all")
                 pos = unmasked.nonzero(as_tuple=True)[0]
                 start, end = int(pos[0]), int(pos[-1])
@@ -193,11 +213,11 @@ def main() -> int:
                     f"({len(pos)} positions spanning {start}..{end})",
                 )
                 _check(
-                    torch.equal(lab[start:end + 1], ids[start:end + 1]),
+                    torch.equal(lab[start : end + 1], ids[start : end + 1]),
                     f"row {idx}: unmasked labels do not equal the corresponding input_ids",
                 )
 
-                decoded_raw = tokenizer.decode(ids[start:end + 1], skip_special_tokens=False)
+                decoded_raw = tokenizer.decode(ids[start : end + 1], skip_special_tokens=False)
                 eot = f"{tokenizer.eos_token}\n"
                 _check(
                     decoded_raw == target + eot,
@@ -219,10 +239,10 @@ def main() -> int:
                     f"the loss)",
                 )
                 _check(
-                    bool((lab[end + 1:] == -100).all()),
+                    bool((lab[end + 1 :] == -100).all()),
                     f"row {idx}: unmasked positions after the completion",
                 )
-                vision_positions = (ids == image_token_id)
+                vision_positions = ids == image_token_id
                 _check(
                     bool((lab[vision_positions] == -100).all()),
                     f"row {idx}: some <|image_pad|> positions are unmasked in labels",
@@ -252,10 +272,12 @@ def main() -> int:
                     f"grouping on a wrong signal",
                 )
 
-                print(f"    {GREEN}OK{OFF}  row {idx}: len={real_len} (est {est_lengths[idx]}) "
-                      f"visual={expected_from_processor} "
-                      f"prompt_masked={start} completion={end - start + 1} "
-                      f"image={raw_sizes[row]}")
+                print(
+                    f"    {GREEN}OK{OFF}  row {idx}: len={real_len} (est {est_lengths[idx]}) "
+                    f"visual={expected_from_processor} "
+                    f"prompt_masked={start} completion={end - start + 1} "
+                    f"image={raw_sizes[row]}"
+                )
 
             except CheckFailed as exc:
                 failures += 1
@@ -272,14 +294,19 @@ def main() -> int:
             pad_tok = processor.image_token
             n_pad = prompt_text.count(pad_tok)
             prompt_text = prompt_text.replace(pad_tok * n_pad, f"{pad_tok} x{n_pad}")
-            print(f"\n{DIM}================ decoded PROMPT (all labels == -100) "
-                  f"================{OFF}")
+            print(
+                f"\n{DIM}================ decoded PROMPT (all labels == -100) "
+                f"================{OFF}"
+            )
             print(prompt_text)
-            print(f"{DIM}================ decoded UNMASKED span (labels != -100) "
-                  f"=========={OFF}")
-            print(tokenizer.decode(ids[start:end + 1], skip_special_tokens=False))
-            print(f"{DIM}=========================================================="
-                  f"========{OFF}\n")
+            print(
+                f"{DIM}================ decoded UNMASKED span (labels != -100) " f"=========={OFF}"
+            )
+            print(tokenizer.decode(ids[start : end + 1], skip_special_tokens=False))
+            print(
+                f"{DIM}=========================================================="
+                f"========{OFF}\n"
+            )
 
     print(f"\nchecked {checked} example(s); {failures} failure(s)")
     if failures:

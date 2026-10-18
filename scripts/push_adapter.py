@@ -25,21 +25,35 @@ REQUIRED = ["adapter_config.json", "adapter_model.safetensors"]
 
 # Never upload optimizer shards, intermediate checkpoints or the base weights.
 IGNORE = [
-    "checkpoint-*/*", "optimizer.pt", "scheduler.pt", "rng_state*", "trainer_state.json",
-    "training_args.bin", "*.pt", "**/pytorch_model_fsdp*", ".git*",
+    "checkpoint-*/*",
+    "optimizer.pt",
+    "scheduler.pt",
+    "rng_state*",
+    "trainer_state.json",
+    "training_args.bin",
+    "*.pt",
+    "**/pytorch_model_fsdp*",
+    ".git*",
 ]
 # PEFT's save_pretrained writes its own README.md; the model card replaces it.
 UPLOAD_IGNORE = IGNORE + ["README.md"]
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--adapter", required=True, help="Directory produced by train_sft.py (final_adapter/)")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "--adapter", required=True, help="Directory produced by train_sft.py (final_adapter/)"
+    )
     p.add_argument("--repo-id", default=DEFAULT_REPO_ID, help="Target Hub model repo")
     p.add_argument("--private", action="store_true", help="Create the repo private")
     p.add_argument("--commit-message", default="Add Qwen2.5-VL CORD JSON LoRA adapter")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Validate everything and print the plan. No network call, no token use.")
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate everything and print the plan. No network call, no token use.",
+    )
     return p
 
 
@@ -56,14 +70,18 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     weights = adapter / "adapter_model.safetensors"
     if weights.stat().st_size == 0:
-        print(f"error: {weights} is 0 bytes -- the FSDP gather produced an empty adapter", file=sys.stderr)
+        print(
+            f"error: {weights} is 0 bytes -- the FSDP gather produced an empty adapter",
+            file=sys.stderr,
+        )
         return 2
     if not MODEL_CARD.is_file():
         print(f"error: model card not found at {MODEL_CARD}", file=sys.stderr)
         return 2
 
     uploaded = [
-        f for f in adapter.iterdir()
+        f
+        for f in adapter.iterdir()
         if f.is_file() and not any(fnmatch.fnmatch(f.name, pat) for pat in UPLOAD_IGNORE)
     ]
     files = sorted(f.name for f in uploaded)
@@ -74,7 +92,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"card:     {MODEL_CARD} -> README.md")
     print(f"files:    {files}")
     print(f"size:     {total / 1e6:.1f} MB")
-    print(f"adapter_config.json: {json.dumps(json.loads((adapter / 'adapter_config.json').read_text()))[:300]}")
+    print(
+        f"adapter_config.json: {json.dumps(json.loads((adapter / 'adapter_config.json').read_text()))[:300]}"
+    )
 
     if args.dry_run:
         print("\n[dry-run] nothing was uploaded and no token was read.")
@@ -90,13 +110,18 @@ def main(argv: list[str] | None = None) -> int:
 
     api = HfApi(token=token)
     who = api.whoami()
-    print(f"[hub] authenticated as {who.get('name')}")   # name only; never the token
+    print(f"[hub] authenticated as {who.get('name')}")  # name only; never the token
 
     try:
-        api.create_repo(repo_id=args.repo_id, repo_type="model", private=args.private, exist_ok=True)
+        api.create_repo(
+            repo_id=args.repo_id, repo_type="model", private=args.private, exist_ok=True
+        )
     except HfHubHTTPError as exc:
-        print(f"error: create_repo failed ({exc.response.status_code if exc.response else '?'}). "
-              f"Check that {args.repo_id} is inside the token's scope.", file=sys.stderr)
+        print(
+            f"error: create_repo failed ({exc.response.status_code if exc.response else '?'}). "
+            f"Check that {args.repo_id} is inside the token's scope.",
+            file=sys.stderr,
+        )
         return 1
 
     info = api.upload_folder(

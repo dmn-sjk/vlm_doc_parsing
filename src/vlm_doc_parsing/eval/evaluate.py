@@ -69,8 +69,14 @@ class FieldCounts:
     def metrics(self) -> dict[str, float | int]:
         p = self.tp / self.n_pred if self.n_pred else 0.0
         r = self.tp / self.n_gold if self.n_gold else 0.0
-        return {"precision": p, "recall": r, "f1": 2 * p * r / (p + r) if p + r else 0.0,
-                "tp": self.tp, "n_pred": self.n_pred, "n_gold": self.n_gold}
+        return {
+            "precision": p,
+            "recall": r,
+            "f1": 2 * p * r / (p + r) if p + r else 0.0,
+            "tp": self.tp,
+            "n_pred": self.n_pred,
+            "n_gold": self.n_gold,
+        }
 
 
 def canonical(obj: Any) -> str:
@@ -89,10 +95,14 @@ def gold_from_example(example: dict) -> Any:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("--config", required=True, help="The YAML the adapter was trained with")
     p.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY.PATH=VALUE")
-    p.add_argument("--adapter", default=None, help="LoRA adapter dir (omit to score the base model)")
+    p.add_argument(
+        "--adapter", default=None, help="LoRA adapter dir (omit to score the base model)"
+    )
     p.add_argument("--base-model", default=None)
     p.add_argument("--processor", default=None)
     p.add_argument("--split", default="test", choices=["train", "validation", "test"])
@@ -108,13 +118,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.INFO, stream=sys.stdout,
-                        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        stream=sys.stdout,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     args = build_parser().parse_args(argv)
 
     cfg = load_config(args.config, args.overrides)
 
-    split = {"train": cfg.data.train_split, "validation": cfg.data.eval_split, "test": cfg.data.test_split}[args.split]
+    split = {
+        "train": cfg.data.train_split,
+        "validation": cfg.data.eval_split,
+        "test": cfg.data.test_split,
+    }[args.split]
     ds = build_datasets(cfg.data, processor=None, model_id=cfg.model.base_model)[split]
     if args.limit:
         ds = ds.select(range(min(args.limit, len(ds))))
@@ -136,7 +153,9 @@ def main(argv: list[str] | None = None) -> int:
 
     for i, example in enumerate(ds):
         image = example["images"][0]
-        raw = generate_json(model, processor, image, SYSTEM_PROMPT, USER_INSTRUCTION, args.max_new_tokens)
+        raw = generate_json(
+            model, processor, image, SYSTEM_PROMPT, USER_INSTRUCTION, args.max_new_tokens
+        )
         parsed = parse_json(raw)
         gold = gold_from_example(example)
         gold_flat = flatten(gold)
@@ -167,7 +186,9 @@ def main(argv: list[str] | None = None) -> int:
             records.append({"index": i, "raw": raw, "parse_ok": parsed["parse_ok"], "gold": gold})
         if (i + 1) % 10 == 0 or i + 1 == n:
             rate = (i + 1) / max(time.time() - t0, 1e-6)
-            logger.info("%d/%d  lenient_parse=%.3f  %.2f ex/s", i + 1, n, lenient_ok / (i + 1), rate)
+            logger.info(
+                "%d/%d  lenient_parse=%.3f  %.2f ex/s", i + 1, n, lenient_ok / (i + 1), rate
+            )
 
     results = {
         "n": n,

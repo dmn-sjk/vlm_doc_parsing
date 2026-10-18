@@ -68,7 +68,9 @@ def _format_split(split: Dataset, num_proc: int, desc: str) -> Dataset:
             raise
         logger.warning(
             "%s: multiprocess map with num_proc=%d failed (%s); retrying single-process",
-            desc, workers, exc,
+            desc,
+            workers,
+            exc,
         )
         return undecoded.map(format_example, num_proc=None, **kwargs)
 
@@ -83,8 +85,11 @@ def build_datasets(cfg: DataConfig, processor: ProcessorMixin | None, model_id: 
         processor = build_processor(cfg, model_id=model_id)
 
     split_map = {"train": cfg.train_split, "validation": cfg.eval_split, "test": cfg.test_split}
-    caps = {"train": cfg.max_train_samples, "validation": cfg.max_eval_samples,
-            "test": cfg.max_eval_samples}
+    caps = {
+        "train": cfg.max_train_samples,
+        "validation": cfg.max_eval_samples,
+        "test": cfg.max_eval_samples,
+    }
 
     raw = load_dataset(cfg.dataset_id)
     out: dict[str, Dataset] = {}
@@ -105,14 +110,22 @@ def build_datasets(cfg: DataConfig, processor: ProcessorMixin | None, model_id: 
             logger.warning(
                 "%s: dropped %d/%d examples (%.1f%%) over max_length=%d "
                 "(longest %d tokens, max_pixels=%d -> %d visual tokens)",
-                name, n_dropped, n_before, 100.0 * n_dropped / max(n_before, 1),
-                cfg.max_length, over[0], cfg.max_pixels,
+                name,
+                n_dropped,
+                n_before,
+                100.0 * n_dropped / max(n_before, 1),
+                cfg.max_length,
+                over[0],
+                cfg.max_pixels,
                 cfg.max_pixels // (FACTOR * FACTOR),
             )
         else:
             logger.info(
                 "%s: kept all %d examples (longest %d tokens, max_length=%d)",
-                name, n_before, max(lengths) if lengths else 0, cfg.max_length,
+                name,
+                n_before,
+                max(lengths) if lengths else 0,
+                cfg.max_length,
             )
         split = split.select(keep)
 

@@ -33,7 +33,9 @@ def estimate_visual_tokens(width: int, height: int, min_pixels: int, max_pixels:
     return (grid_h * grid_w) // (MERGE_SIZE**2)
 
 
-def estimate_resized_size(width: int, height: int, min_pixels: int, max_pixels: int) -> tuple[int, int]:
+def estimate_resized_size(
+    width: int, height: int, min_pixels: int, max_pixels: int
+) -> tuple[int, int]:
     """`(width, height)` the processor resizes this image to."""
     resized_h, resized_w = smart_resize(
         height, width, factor=FACTOR, min_pixels=min_pixels, max_pixels=max_pixels

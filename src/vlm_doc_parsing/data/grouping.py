@@ -57,13 +57,9 @@ def estimate_lengths(
         if prompt_str in render_cache:
             prompt_text_tokens = render_cache[prompt_str]
         else:
-            prompt_text_tokens = len(
-                tokenizer(prompt_str, add_special_tokens=False)["input_ids"]
-            )
+            prompt_text_tokens = len(tokenizer(prompt_str, add_special_tokens=False)["input_ids"])
             render_cache[prompt_str] = prompt_text_tokens
-        completion_tokens = len(
-            tokenizer(completion_str, add_special_tokens=False)["input_ids"]
-        )
+        completion_tokens = len(tokenizer(completion_str, add_special_tokens=False)["input_ids"])
 
         visual = 0
         n_images = 0
