@@ -44,7 +44,9 @@ def resolve_base_model(adapter: str | None, explicit: str | None) -> str:
 
 def load_model_and_processor(args: argparse.Namespace):
     base = resolve_base_model(args.adapter, args.base_model)
-    dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[args.dtype]
+    dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[
+        args.dtype
+    ]
 
     logger.info("base=%s dtype=%s attn=%s", base, args.dtype, args.attn_implementation)
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
@@ -63,9 +65,13 @@ def load_model_and_processor(args: argparse.Namespace):
     model.eval()
     # The adapter dir holds the training processor (with its pixel caps): prefer it.
     proc_src = args.processor or (
-        args.adapter if args.adapter and (Path(args.adapter) / "preprocessor_config.json").exists() else base
+        args.adapter
+        if args.adapter and (Path(args.adapter) / "preprocessor_config.json").exists()
+        else base
     )
-    proc_kwargs = {k: v for k, v in (("min_pixels", args.min_pixels), ("max_pixels", args.max_pixels)) if v}
+    proc_kwargs = {
+        k: v for k, v in (("min_pixels", args.min_pixels), ("max_pixels", args.max_pixels)) if v
+    }
     logger.info("processor from %s %s", proc_src, proc_kwargs or "")
     processor = AutoProcessor.from_pretrained(proc_src, **proc_kwargs)
     return model, processor
@@ -86,7 +92,12 @@ def generate_json(model, processor, image, system_prompt, instruction, max_new_t
     device = next(model.parameters()).device
     inputs = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in inputs.items()}
     out = model.generate(  # greedy
-        **inputs, max_new_tokens=max_new_tokens, do_sample=False, temperature=None, top_p=None, top_k=None
+        **inputs,
+        max_new_tokens=max_new_tokens,
+        do_sample=False,
+        temperature=None,
+        top_p=None,
+        top_k=None,
     )
     prompt_len = inputs["input_ids"].shape[1]
     return processor.tokenizer.decode(out[0][prompt_len:], skip_special_tokens=True)
@@ -110,12 +121,18 @@ def parse_json(raw: str) -> dict:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("--image", required=True, help="Path to a document image file (PNG, JPEG, ...)")
-    p.add_argument("--adapter", default=None, help="LoRA adapter directory (omit for the base model)")
+    p.add_argument(
+        "--adapter", default=None, help="LoRA adapter directory (omit for the base model)"
+    )
     p.add_argument("--base-model", default=None, help="Overrides adapter_config.json")
     p.add_argument("--processor", default=None, help="Overrides where the processor is loaded from")
-    p.add_argument("--merge", action="store_true", help="merge_and_unload() the adapter into the base weights")
+    p.add_argument(
+        "--merge", action="store_true", help="merge_and_unload() the adapter into the base weights"
+    )
     p.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float16", "float32"])
     p.add_argument("--attn-implementation", default="sdpa", help="flash-attn is not installed here")
     p.add_argument("--device-map", default="auto")
@@ -130,7 +147,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     # Logs go to stderr; stdout carries only the JSON or the raw text.
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    )
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.image.lower().endswith(".pdf"):

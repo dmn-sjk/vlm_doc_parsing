@@ -40,12 +40,23 @@ logger = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("--config", required=True, help="Path to a YAML config (see configs/).")
-    p.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY.PATH=VALUE",
-                   help="Dotted override on top of the YAML, repeatable, e.g. --set train.learning_rate=2e-4")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Build the model and the trainer, print the trainable parameters, exit.")
+    p.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        metavar="KEY.PATH=VALUE",
+        help="Dotted override on top of the YAML, repeatable, e.g. --set train.learning_rate=2e-4",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Build the model and the trainer, print the trainable parameters, exit.",
+    )
     return p
 
 
@@ -129,7 +140,9 @@ class LengthGroupedVisionSFTTrainer(SFTTrainer):
                 f"dataset has {len(train_dataset)}; refusing to mis-group batches."
             )
         a = self.args
-        megabatch = a.per_device_train_batch_size * a.gradient_accumulation_steps * max(1, a.world_size)
+        megabatch = (
+            a.per_device_train_batch_size * a.gradient_accumulation_steps * max(1, a.world_size)
+        )
         seed = a.data_seed if a.data_seed is not None else a.seed
         # accelerate slices one sampler on every rank, so the permutation must match everywhere.
         generator = torch.Generator().manual_seed(seed)
@@ -176,7 +189,9 @@ def build_sft_config(cfg: Config, output_dir: str) -> SFTConfig:
         max_length=cfg.data.max_length,
         dataset_num_proc=cfg.data.num_proc,
         gradient_checkpointing=cfg.model.gradient_checkpointing,
-        gradient_checkpointing_kwargs={"use_reentrant": False},  # TRL sets it only for transformers < 5
+        gradient_checkpointing_kwargs={
+            "use_reentrant": False
+        },  # TRL sets it only for transformers < 5
         train_sampling_strategy="group_by_length" if cfg.data.group_by_length else "random",
         ddp_timeout=t.ddp_timeout,
         dataloader_num_workers=t.dataloader_num_workers,
@@ -226,8 +241,11 @@ def verify_adapter(path: str) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.INFO, stream=sys.stdout,
-                        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        stream=sys.stdout,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     args = build_parser().parse_args(argv)
     cfg = load_config(args.config, args.overrides)
     output_dir = expand_path(cfg.train.output_dir)
@@ -253,7 +271,9 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("resolved config:\n%s", yaml.safe_dump(resolved, sort_keys=False).rstrip())
         logger.info(
             "world_size=%d device=%s fsdp=%s cpu_ram_efficient_loading=%s",
-            state.num_processes, device, os.environ.get("ACCELERATE_USE_FSDP", "false"),
+            state.num_processes,
+            device,
+            os.environ.get("ACCELERATE_USE_FSDP", "false"),
             os.environ.get("FSDP_CPU_RAM_EFFICIENT_LOADING", "false"),
         )
 
@@ -276,7 +296,9 @@ def main(argv: list[str] | None = None) -> int:
         if lengths is not None:
             logger.info(
                 "length signal: min=%d p50=%d max=%d",
-                min(lengths), sorted(lengths)[len(lengths) // 2], max(lengths),
+                min(lengths),
+                sorted(lengths)[len(lengths) // 2],
+                max(lengths),
             )
 
     # SFTTrainer initialises LoRA before Trainer calls set_seed, so seed here or the adapter
@@ -316,7 +338,11 @@ def main(argv: list[str] | None = None) -> int:
         logger.info(
             "vram rank=%d peak_allocated=%.2fGiB peak_reserved=%.2fGiB device_total=%.2fGiB "
             "headroom=%.2fGiB",
-            state.process_index, peak_gib, reserved_gib, total_gib, total_gib - reserved_gib,
+            state.process_index,
+            peak_gib,
+            reserved_gib,
+            total_gib,
+            total_gib - reserved_gib,
         )
 
     if eval_ds is not None:

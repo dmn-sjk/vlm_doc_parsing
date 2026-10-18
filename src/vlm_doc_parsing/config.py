@@ -46,8 +46,15 @@ class LoraConfig:
     bias: str = "none"
     # Never `lm_head`: TRL rejects loss_type="chunked_nll" with a PEFT lm_head.
     target_modules: list[str] = field(
-        default_factory=lambda: ["q_proj", "k_proj", "v_proj", "o_proj",
-                                 "gate_proj", "up_proj", "down_proj"]
+        default_factory=lambda: [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ]
     )
     adapt_vision_tower: bool = False
     modules_to_save: list[str] = field(default_factory=list)
@@ -94,8 +101,8 @@ class TrainConfig:
     # chunked_nll keeps peak activation memory off the vocab dimension.
     loss_type: str = "chunked_nll"
     completion_only_loss: bool = True
-    packing: bool = False        # unsupported for vision datasets
-    padding_free: bool = False   # unsupported for vision datasets
+    packing: bool = False  # unsupported for vision datasets
+    padding_free: bool = False  # unsupported for vision datasets
 
     ddp_timeout: int = 3600  # covers rank 0 reading and broadcasting the checkpoint
     dataloader_num_workers: int = 2

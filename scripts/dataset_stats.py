@@ -73,19 +73,26 @@ def histogram(values: list[int], bins: int = 12, width: int = 46) -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--config", default=str(DEFAULT_CONFIG),
-                   help="YAML config (see vlm_doc_parsing.config)")
-    p.add_argument("-o", "--override", action="append", default=[],
-                   help="config override, e.g. -o data.max_pixels=802816 (repeatable)")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "--config", default=str(DEFAULT_CONFIG), help="YAML config (see vlm_doc_parsing.config)"
+    )
+    p.add_argument(
+        "-o",
+        "--override",
+        action="append",
+        default=[],
+        help="config override, e.g. -o data.max_pixels=802816 (repeatable)",
+    )
     p.add_argument("--splits", default="train,validation,test")
     p.add_argument("--model-id", default=None, help="defaults to the config's model.base_model")
     p.add_argument(
         "--candidates",
         default="256,512,768,1024,1280,1536,2048,4096",
         help="candidate max_pixels values, expressed in *visual tokens* "
-             "(the value is multiplied by 28*28)",
+        "(the value is multiplied by 28*28)",
     )
     return p.parse_args()
 
@@ -108,14 +115,10 @@ def main() -> int:
             ],
             images=[None],
         ),
-        "completion": prepare_multimodal_messages(
-            [{"role": "assistant", "content": ""}]
-        ),
+        "completion": prepare_multimodal_messages([{"role": "assistant", "content": ""}]),
     }
     rendered = apply_chat_template(probe, processor)
-    prompt_overhead = (
-        len(tokenizer(rendered["prompt"], add_special_tokens=False)["input_ids"]) - 1
-    )
+    prompt_overhead = len(tokenizer(rendered["prompt"], add_special_tokens=False)["input_ids"]) - 1
     # <|im_end|>\n closing every completion.
     completion_overhead = len(
         tokenizer(rendered["completion"], add_special_tokens=False)["input_ids"]
@@ -124,12 +127,16 @@ def main() -> int:
     candidates = [int(c.strip()) for c in args.candidates.split(",") if c.strip()]
 
     print(f"dataset          : {data.dataset_id}")
-    print(f"configured caps  : min_pixels={data.min_pixels} "
-          f"({data.min_pixels // (FACTOR * FACTOR)} tokens)  "
-          f"max_pixels={data.max_pixels} ({data.max_pixels // (FACTOR * FACTOR)} tokens)")
+    print(
+        f"configured caps  : min_pixels={data.min_pixels} "
+        f"({data.min_pixels // (FACTOR * FACTOR)} tokens)  "
+        f"max_pixels={data.max_pixels} ({data.max_pixels // (FACTOR * FACTOR)} tokens)"
+    )
     print(f"max_length       : {data.max_length}")
-    print(f"prompt overhead  : {prompt_overhead} tokens (system + instruction + chat "
-          f"template, excluding visual tokens)")
+    print(
+        f"prompt overhead  : {prompt_overhead} tokens (system + instruction + chat "
+        f"template, excluding visual tokens)"
+    )
     print(f"completion wrap  : {completion_overhead} tokens (<|im_end|>\\n)")
 
     raw = load_dataset(data.dataset_id)
@@ -147,8 +154,7 @@ def main() -> int:
                 sizes.append(im.size)
             tgt = target_json(row["ground_truth"])
             target_tokens.append(
-                len(tokenizer(tgt, add_special_tokens=False)["input_ids"])
-                + completion_overhead
+                len(tokenizer(tgt, add_special_tokens=False)["input_ids"]) + completion_overhead
             )
 
         n = len(sizes)
@@ -162,33 +168,40 @@ def main() -> int:
         print(f"{'=' * 78}")
         print(f"  width      {fmt_pct(percentiles(widths))}")
         print(f"  height     {fmt_pct(percentiles(heights))}")
-        print(f"  megapixels {fmt_pct({q: v // 1000 for q, v in percentiles(pixels).items()})}  (x1000 px)")
-        print(f"  aspect     min={min(aspects):.2f} median={sorted(aspects)[n // 2]:.2f} "
-              f"max={max(aspects):.2f}")
+        print(
+            f"  megapixels {fmt_pct({q: v // 1000 for q, v in percentiles(pixels).items()})}  (x1000 px)"
+        )
+        print(
+            f"  aspect     min={min(aspects):.2f} median={sorted(aspects)[n // 2]:.2f} "
+            f"max={max(aspects):.2f}"
+        )
 
-        visual = [
-            estimate_visual_tokens(w, h, data.min_pixels, data.max_pixels)
-            for w, h in sizes
-        ]
-        print(f"\n  estimated visual tokens @ max_pixels={data.max_pixels} "
-              f"({data.max_pixels // (FACTOR * FACTOR)} tokens):")
+        visual = [estimate_visual_tokens(w, h, data.min_pixels, data.max_pixels) for w, h in sizes]
+        print(
+            f"\n  estimated visual tokens @ max_pixels={data.max_pixels} "
+            f"({data.max_pixels // (FACTOR * FACTOR)} tokens):"
+        )
         print(f"    {fmt_pct(percentiles(visual))}")
         print(histogram(visual))
 
-        rw, rh = zip(*[
-            estimate_resized_size(w, h, data.min_pixels, data.max_pixels) for w, h in sizes
-        ])
+        rw, rh = zip(
+            *[estimate_resized_size(w, h, data.min_pixels, data.max_pixels) for w, h in sizes]
+        )
         print(f"  resized width  {fmt_pct(percentiles(list(rw)))}")
         print(f"  resized height {fmt_pct(percentiles(list(rh)))}")
 
-        print(f"\n  target JSON length in tokens (incl. {completion_overhead}-token "
-              f"assistant wrapper):")
+        print(
+            f"\n  target JSON length in tokens (incl. {completion_overhead}-token "
+            f"assistant wrapper):"
+        )
         print(f"    {fmt_pct(percentiles(target_tokens))}")
         print(histogram(target_tokens))
 
         print(f"\n  max_pixels sweep (drop = total tokens > max_length={data.max_length}):")
-        print(f"    {'tokens':>7} {'max_pixels':>11} | {'visual p50':>10} {'visual p95':>10} "
-              f"{'visual max':>10} | {'total p50':>9} {'total p95':>9} {'total max':>9} | dropped")
+        print(
+            f"    {'tokens':>7} {'max_pixels':>11} | {'visual p50':>10} {'visual p95':>10} "
+            f"{'visual max':>10} | {'total p50':>9} {'total p95':>9} {'total max':>9} | dropped"
+        )
         for cand in candidates:
             mp = cand * (FACTOR * FACTOR)
             if mp < data.min_pixels:
@@ -199,9 +212,11 @@ def main() -> int:
             vp = percentiles(vis, (50, 95, 100))
             tp = percentiles(totals, (50, 95, 100))
             mark = " <-- configured" if mp == data.max_pixels else ""
-            print(f"    {cand:>7} {mp:>11} | {vp[50]:>10} {vp[95]:>10} {vp[100]:>10} | "
-                  f"{tp[50]:>9} {tp[95]:>9} {tp[100]:>9} | "
-                  f"{dropped:>4}/{n} ({100.0 * dropped / n:5.1f}%){mark}")
+            print(
+                f"    {cand:>7} {mp:>11} | {vp[50]:>10} {vp[95]:>10} {vp[100]:>10} | "
+                f"{tp[50]:>9} {tp[95]:>9} {tp[100]:>9} | "
+                f"{dropped:>4}/{n} ({100.0 * dropped / n:5.1f}%){mark}"
+            )
 
     return 0
 
