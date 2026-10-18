@@ -109,6 +109,9 @@ class TrainConfig:
     packing: bool = False        # unsupported for vision datasets
     padding_free: bool = False   # unsupported for vision datasets
 
+    ddp_timeout: int = 3600  # rank-0-only checkpoint read + sync_module_states broadcast is slow
+    dataloader_num_workers: int = 2
+
 
 @dataclass
 class Config:

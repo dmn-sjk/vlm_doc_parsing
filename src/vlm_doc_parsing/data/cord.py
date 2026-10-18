@@ -43,7 +43,9 @@ import logging
 from typing import Any
 
 from datasets import Dataset, DatasetDict, Features, Image, List, Value, load_dataset
+from transformers import ProcessorMixin
 
+from vlm_doc_parsing.config import DataConfig
 from vlm_doc_parsing.data.grouping import estimate_lengths
 from vlm_doc_parsing.data.resolution import FACTOR, build_processor
 from vlm_doc_parsing.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION, target_json
@@ -129,21 +131,15 @@ def _format_split(split: Dataset, num_proc: int, desc: str) -> Dataset:
 
 
 def build_datasets(
-    cfg: Any,
-    processor: Any = None,
-    model_id: str | None = None,
+    cfg: DataConfig,
+    processor: ProcessorMixin | None,
+    model_id: str,
 ) -> DatasetDict:
     """Build the ``train`` / ``validation`` / ``test`` splits for ``SFTTrainer``.
 
-    Args:
-        cfg: a :class:`vlm_doc_parsing.config.DataConfig`.
-        processor: an already-built ``Qwen2_5_VLProcessor``. Optional; only used to
-            estimate sequence lengths for the ``max_length`` filter. Pass the trainer's own
-            processor to avoid loading a second copy. If ``None`` one is built via
-            :func:`vlm_doc_parsing.data.resolution.build_processor`.
-        model_id: forwarded to ``build_processor`` when ``processor`` is ``None``.
-            ``DataConfig`` has no model field, so Phase 2 should pass
-            ``model_cfg.base_model`` (or rely on ``$BASE_MODEL``).
+    ``processor`` is only used to estimate sequence lengths for the ``max_length`` filter;
+    pass the trainer's own to avoid loading a second copy. When it is ``None``, one is
+    built from ``model_id`` (``ModelConfig.base_model``).
 
     Returns:
         A ``DatasetDict`` with keys ``train`` / ``validation`` / ``test``, every example in
