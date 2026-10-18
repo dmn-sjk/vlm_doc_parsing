@@ -46,7 +46,7 @@ from datasets import Image, List
 from PIL import Image as PILImage
 from trl.data_utils import apply_chat_template, prepare_multimodal_messages
 
-from .resolution import estimate_visual_tokens
+from vlm_doc_parsing.data.resolution import estimate_visual_tokens
 
 
 def _render(example: dict[str, Any], processor: Any) -> tuple[str, str]:
@@ -79,10 +79,10 @@ def estimate_lengths(
 
     Args:
         dataset: a ``datasets.Dataset`` in the trainer-ready format produced by
-            :func:`src.data.cord.build_datasets` -- columns ``images`` / ``prompt`` /
+            :func:`vlm_doc_parsing.data.cord.build_datasets` -- columns ``images`` / ``prompt`` /
             ``completion``.
         processor: the ``Qwen2_5_VLProcessor`` from
-            :func:`src.data.resolution.build_processor`. Only its chat template and
+            :func:`vlm_doc_parsing.data.resolution.build_processor`. Only its chat template and
             tokenizer are used; the model weights are never loaded.
         min_pixels / max_pixels: the same caps the processor was built with. Passed
             explicitly rather than read off the processor so the stats script can sweep

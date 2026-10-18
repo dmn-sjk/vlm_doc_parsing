@@ -1,5 +1,5 @@
 [project]
-name = "vlm-finetuning"
+name = "vlm-doc-parsing"
 version = "0.1.0"
 description = "Distributed LoRA fine-tuning of Qwen2.5-VL for structured JSON document parsing (TRL + FSDP + SLURM)"
 readme = "README.md"
@@ -20,15 +20,17 @@ dependencies = [
     "accelerate==1.14.0",
     "datasets==4.8.5",
     "huggingface-hub==1.29.0",
-    "qwen-vl-utils==0.0.14",
     "safetensors==0.8.0",
     "numpy==2.5.2",
     "pillow==12.3.0",
     "pyyaml==6.0.3",
-    "python-dotenv==1.2.3",
     "levenshtein==0.27.4",
     "wandb==0.29.0",
 ]
+
+[build-system]
+requires = ["uv_build>=0.9,<0.10"]
+build-backend = "uv_build"
 
 [dependency-groups]
 dev = ["ruff>=0.6"]
@@ -50,6 +52,8 @@ torchvision = { index = "pytorch-cu128" }
 # macOS/Windows too, where the cu128 wheels do not exist, and the lock fails.
 [tool.uv]
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+# Install the project itself (editable) so `vlm_doc_parsing` imports without PYTHONPATH.
+package = true
 
 # Freeze the resolution horizon to the date the trained environment was built
 # (2026-08-29). Without it, re-locking picks up newer patch releases of transitive deps and

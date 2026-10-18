@@ -12,14 +12,15 @@ asserts, per example:
 
 1. the number of ``<|image_pad|>`` tokens in ``input_ids`` equals what the image processor
    actually produced (``image_grid_thw.prod() // merge_size**2``), and equals what
-   ``src.data.resolution.estimate_visual_tokens`` predicted from the raw image size;
+   ``vlm_doc_parsing.data.resolution.estimate_visual_tokens`` predicted from the raw image
+   size;
 2. the unmasked label span (``labels != -100``) is contiguous and decodes to **exactly**
    the target JSON plus the assistant end-of-turn tokens;
 3. every position before that span -- system prompt, instruction, vision tokens, padding --
    is ``-100``;
 4. nothing was truncated away by ``max_length``;
-5. ``src.data.grouping.estimate_lengths`` -- the length signal Phase 2 feeds to the
-   length-grouped sampler -- equals the real unpadded sequence length.
+5. ``vlm_doc_parsing.data.grouping.estimate_lengths`` -- the length signal Phase 2 feeds to
+   the length-grouped sampler -- equals the real unpadded sequence length.
 
 Exits non-zero on any failure.
 
@@ -40,10 +41,10 @@ import sys
 import torch
 from PIL import Image as PILImage
 
-from src.config import load_config
-from src.data.cord import build_datasets
-from src.data.grouping import estimate_lengths
-from src.data.resolution import build_processor, estimate_visual_tokens
+from vlm_doc_parsing.config import load_config
+from vlm_doc_parsing.data.cord import build_datasets
+from vlm_doc_parsing.data.grouping import estimate_lengths
+from vlm_doc_parsing.data.resolution import build_processor, estimate_visual_tokens
 
 RED = "\033[31m"
 GREEN = "\033[32m"
@@ -62,7 +63,7 @@ def _check(ok: bool, message: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--config", default=None, help="optional YAML config (src.config.load_config)")
+    p.add_argument("--config", default=None, help="optional YAML config (see vlm_doc_parsing.config)")
     p.add_argument("-o", "--override", action="append", default=[],
                    help="config override, e.g. -o data.max_pixels=802816 (repeatable)")
     p.add_argument("--split", default="validation", choices=["train", "validation", "test"])
@@ -139,8 +140,8 @@ def main() -> int:
             raw_sizes.append(sizes)
 
         examples = [ds[i] for i in range(lo, hi)]
-        # The target string as `src.data.schema.target_json` produced it, read back off the
-        # dataset so the assertion compares against what is actually stored.
+        # The target string as `vlm_doc_parsing.data.schema.target_json` produced it, read back
+        # off the dataset so the assertion compares against what is actually stored.
         targets = [ex["completion"][0]["content"] for ex in examples]
 
         batch = collator(examples)
@@ -187,8 +188,8 @@ def main() -> int:
                     expected_from_estimator == expected_from_processor,
                     f"row {idx}: estimate_visual_tokens said {expected_from_estimator} but "
                     f"the processor produced {expected_from_processor} for sizes "
-                    f"{raw_sizes[row]} -- src/data/resolution.py is out of sync with "
-                    f"transformers' smart_resize",
+                    f"{raw_sizes[row]} -- src/vlm_doc_parsing/data/resolution.py is out of "
+                    f"sync with transformers' smart_resize",
                 )
 
                 # -- 2. the unmasked span is exactly the completion ----------------------

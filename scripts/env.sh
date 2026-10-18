@@ -66,7 +66,6 @@ mkdir -p "${HF_DATASETS_CACHE}" "${WANDB_DIR}" "${TRITON_CACHE_DIR}" "${TORCHIND
 : "${UV_PROJECT_ENVIRONMENT:=${PROJ_ROOT}/.venv}"
 export UV_PROJECT_ENVIRONMENT
 export PATH="${UV_PROJECT_ENVIRONMENT}/bin:${PATH}"
-export PYTHONPATH="${PROJ_ROOT}:${PYTHONPATH:-}"
 
 export BASE_MODEL="${BASE_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}"
 export DATASET_ID="${DATASET_ID:-naver-clova-ix/cord-v2}"

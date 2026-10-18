@@ -14,7 +14,7 @@ report three independent numbers:
                         strings. Cheap, and it degrades gracefully when the JSON is broken,
                         so it is the only one of the three that is defined for every sample.
 
-    python -m src.eval.evaluate --config configs/sft_multinode.yaml \
+    python -m vlm_doc_parsing.eval.evaluate --config configs/sft_multinode.yaml \
         --adapter $SITE_WORK_DIR/runs/.../final_adapter --split test
 """
 
@@ -29,10 +29,10 @@ from typing import Any
 
 import Levenshtein
 
-from src.config import load_config
-from src.data.cord import build_datasets
-from src.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION
-from src.infer.predict import (
+from vlm_doc_parsing.config import load_config
+from vlm_doc_parsing.data.cord import build_datasets
+from vlm_doc_parsing.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION
+from vlm_doc_parsing.infer.predict import (
     generate_json,
     load_model_and_processor,
     parse_json,

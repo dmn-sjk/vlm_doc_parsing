@@ -88,4 +88,4 @@ FWD_ARGS=""
 [ $# -eq 0 ] || FWD_ARGS=$(printf '%q ' "$@")
 
 srun --ntasks="${NNODES}" --ntasks-per-node=1 \
-  bash -c "${LAUNCHER} -m src.train.train_sft --config ${TRAIN_CFG} ${FWD_ARGS}"
+  bash -c "${LAUNCHER} -m vlm_doc_parsing.train.train_sft --config ${TRAIN_CFG} ${FWD_ARGS}"

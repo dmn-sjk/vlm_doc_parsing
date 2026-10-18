@@ -101,5 +101,6 @@ extracts every field but emits a trailing comma scores zero downstream. "Strict"
 Training pipeline, SLURM sbatch scripts and Accelerate/FSDP configs:
 **[https://github.com/dmn-sjk/vlm_doc_parsing.git](https://github.com/dmn-sjk/vlm_doc_parsing.git)**
 
-See [`src/infer/predict.py`](https://github.com/dmn-sjk/vlm_doc_parsing.git/blob/master/src/infer/predict.py) there for a
-complete inference example, including `--merge` (`merge_and_unload`) for faster serving.
+See
+[`src/vlm_doc_parsing/infer/predict.py`](https://github.com/dmn-sjk/vlm_doc_parsing.git/blob/master/src/vlm_doc_parsing/infer/predict.py)
+there for a complete inference example, including `--merge` (`merge_and_unload`) for faster serving.

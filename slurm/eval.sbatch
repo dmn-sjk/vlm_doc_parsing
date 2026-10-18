@@ -1,6 +1,6 @@
 #!/bin/bash
 # Evaluation: 1 GPU, generate JSON for a held-out split and score it.
-# Usage: sbatch slurm/eval.sbatch <adapter_dir> [extra args for src.eval.evaluate]
+# Usage: sbatch slurm/eval.sbatch <adapter_dir> [extra args for vlm_doc_parsing.eval.evaluate]
 # Account/partition are deliberately not set here: scripts/submit.sh passes them from the
 # site profile, or pass `sbatch -A <acct> -p <part>` / set SBATCH_ACCOUNT, SBATCH_PARTITION
 # (precedence per `man sbatch`: CLI > SBATCH_* env > #SBATCH).
@@ -46,7 +46,7 @@ nvidia-smi --query-gpu=index,name,memory.total --format=csv
 
 # Single process, no accelerate launcher: generation is sequential and the merged 7B fits
 # on one A100. Sharding it would only add all-gather latency per token.
-python -m src.eval.evaluate \
+python -m vlm_doc_parsing.eval.evaluate \
   --config "${EVAL_CFG:-configs/sft_1node.yaml}" \
   "${ADAPTER_ARGS[@]}" \
   --out "${OUT}" \
