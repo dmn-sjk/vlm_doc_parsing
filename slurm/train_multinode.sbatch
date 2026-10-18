@@ -89,5 +89,3 @@ FWD_ARGS=""
 
 srun --ntasks="${NNODES}" --ntasks-per-node=1 \
   bash -c "${LAUNCHER} -m src.train.train_sft --config ${TRAIN_CFG} ${FWD_ARGS}"
-
-echo "train job ${SLURM_JOB_ID} finished with status $?"

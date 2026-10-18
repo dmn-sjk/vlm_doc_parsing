@@ -1,7 +1,7 @@
 # Single-GPU, no distributed wrapper: the workstation launcher, and the quickest way to
 # check the data path, the chat template, the loss mask and the adapter save, none of
 # which need sharding. A 8.2 B bf16 model plus LoRA plus gradient checkpointing at a
-# small max_pixels fits in one 80 GB A100.
+# small max_pixels fits in one 40 GB A100.
 compute_environment: LOCAL_MACHINE
 distributed_type: 'NO'
 mixed_precision: bf16

@@ -35,7 +35,7 @@ fsdp_config:
 
   # Shard params + grads + optimizer state across all 16 ranks. The 8.2 B bf16 base is
   # ~16.6 GB; FULL_SHARD puts ~1.0 GB of weights on each of 16 A100s and leaves the rest
-  # of the 80 GB for visual activations, which are the real consumer here.
+  # of the 40 GB for visual activations, which are the real consumer here.
   fsdp_sharding_strategy: FULL_SHARD
   fsdp_reshard_after_forward: FULL_SHARD
   fsdp_offload_params: false          # not needed; CPU offload would throttle the run

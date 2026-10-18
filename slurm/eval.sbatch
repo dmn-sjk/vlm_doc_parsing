@@ -25,7 +25,6 @@ source scripts/env.sh
 
 export HF_HUB_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
-export WANDB_PROJECT=qwen25vl-cord-json
 export WANDB_MODE=disabled
 export OMP_NUM_THREADS=8         # one process; matches the value the published eval used
 
@@ -52,5 +51,3 @@ python -m src.eval.evaluate \
   "${ADAPTER_ARGS[@]}" \
   --out "${OUT}" \
   "$@"
-
-echo "eval job ${SLURM_JOB_ID} finished with status $?"

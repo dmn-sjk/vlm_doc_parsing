@@ -36,7 +36,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from accelerate import PartialState  # noqa: E402
-from src.config import Config, expand_path, load_config, parse_override  # noqa: E402
+from src.config import Config, expand_path, load_config  # noqa: E402
 
 logger = logging.getLogger("train_sft")
 
@@ -75,21 +75,6 @@ def build_parser() -> argparse.ArgumentParser:
         "parameter count, then exit without training.",
     )
     return p
-
-
-def resolve_config(args: argparse.Namespace) -> Config:
-    merged: dict[str, Any] = {}
-    for item in args.overrides:
-        _deep_merge(merged, parse_override(item))
-    return load_config(args.config, merged or None)
-
-
-def _deep_merge(base: dict, other: dict) -> None:
-    for k, v in other.items():
-        if isinstance(v, dict) and isinstance(base.get(k), dict):
-            _deep_merge(base[k], v)
-        else:
-            base[k] = v
 
 
 # --------------------------------------------------------------------------------------
@@ -437,7 +422,7 @@ def main(argv: list[str] | None = None) -> int:
         stream=sys.stdout,
     )
     args = build_parser().parse_args(argv)
-    cfg = resolve_config(args)
+    cfg = load_config(args.config, args.overrides)
     if args.no_length_grouping:
         cfg.data.group_by_length = False
 

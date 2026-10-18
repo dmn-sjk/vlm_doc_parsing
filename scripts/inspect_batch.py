@@ -40,7 +40,7 @@ import sys
 import torch
 from PIL import Image as PILImage
 
-from src.config import Config, load_config, parse_override
+from src.config import load_config
 from src.data.cord import build_datasets
 from src.data.grouping import estimate_lengths
 from src.data.resolution import build_processor, estimate_visual_tokens
@@ -77,31 +77,10 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def load_cfg(args: argparse.Namespace) -> Config:
-    overrides: dict = {}
-    for item in args.override:
-        d = parse_override(item)
-        for k, v in d.items():
-            if isinstance(v, dict) and isinstance(overrides.get(k), dict):
-                overrides[k].update(v)
-            else:
-                overrides[k] = v
-    if args.config:
-        return load_config(args.config, overrides)
-    cfg = Config()
-    for section, values in overrides.items():
-        target = getattr(cfg, section)
-        for key, value in values.items():
-            if not hasattr(target, key):
-                raise ValueError(f"unknown config key {section}.{key}")
-            setattr(target, key, value)
-    return cfg
-
-
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     args = parse_args()
-    cfg = load_cfg(args)
+    cfg = load_config(args.config, args.override)
 
     # Only inspect as many examples as we need; keeps the login-node footprint tiny.
     wanted = args.batch_size * args.num_batches
