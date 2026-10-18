@@ -18,6 +18,7 @@ Usage::
     source scripts/env.sh
     python scripts/dataset_stats.py
     python scripts/dataset_stats.py --splits train --candidates 256,512,1024,2048
+    python scripts/dataset_stats.py -o data.max_length=2048
 """
 
 from __future__ import annotations
@@ -25,10 +26,11 @@ from __future__ import annotations
 import argparse
 import io
 import sys
+from pathlib import Path
 
 from PIL import Image as PILImage
 
-from vlm_doc_parsing.config import Config
+from vlm_doc_parsing.config import load_config
 from vlm_doc_parsing.data.resolution import (
     FACTOR,
     build_processor,
@@ -36,6 +38,8 @@ from vlm_doc_parsing.data.resolution import (
     estimate_visual_tokens,
 )
 from vlm_doc_parsing.data.schema import SYSTEM_PROMPT, USER_INSTRUCTION, target_json
+
+DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "sft_1node.yaml"
 
 
 def percentiles(values: list[int], qs=(0, 5, 25, 50, 75, 95, 100)) -> dict[int, int]:
@@ -70,8 +74,12 @@ def histogram(values: list[int], bins: int = 12, width: int = 46) -> str:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--config", default=str(DEFAULT_CONFIG),
+                   help="YAML config (see vlm_doc_parsing.config)")
+    p.add_argument("-o", "--override", action="append", default=[],
+                   help="config override, e.g. -o data.max_pixels=802816 (repeatable)")
     p.add_argument("--splits", default="train,validation,test")
-    p.add_argument("--model-id", default=None, help="defaults to $BASE_MODEL")
+    p.add_argument("--model-id", default=None, help="defaults to the config's model.base_model")
     p.add_argument(
         "--candidates",
         default="256,512,768,1024,1280,1536,2048,4096",
@@ -83,10 +91,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    cfg = Config()
+    cfg = load_config(args.config, args.override)
     data = cfg.data
 
-    processor = build_processor(data, model_id=args.model_id)
+    processor = build_processor(data, model_id=args.model_id or cfg.model.base_model)
     tokenizer = processor.tokenizer
 
     # The prompt half is identical for every example, so its token cost is a constant we

@@ -161,12 +161,29 @@ def _deep_update(base: dict, other: dict) -> dict:
     return out
 
 
+def _load_yaml(path: Path, chain: tuple[Path, ...] = ()) -> dict:
+    """Read a YAML config, resolving a top-level `extends: <path relative to this file>`
+    by deep-merging this file over its parent."""
+    path = path.resolve()
+    if path in chain:
+        raise ValueError(f"config extends cycle: {' -> '.join(map(str, chain + (path,)))}")
+    raw = yaml.safe_load(path.read_text()) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: top level must be a mapping, got {raw!r}")
+    parent = raw.pop("extends", None)
+    if parent is None:
+        return raw
+    if not isinstance(parent, str):
+        raise ValueError(f"{path}: `extends` must be a path, got {parent!r}")
+    return _deep_update(_load_yaml(path.parent / parent, chain + (path,)), raw)
+
+
 def load_config(path: str | Path | None, overrides: Iterable[str] = ()) -> Config:
     """Load a YAML config (or the defaults when `path` is None), then deep-merge each
     `KEY.PATH=VALUE` override on top, in order (CLI wins)."""
     raw = {}
     if path is not None:
-        raw = yaml.safe_load(Path(path).read_text()) or {}
+        raw = _load_yaml(Path(path))
     for item in overrides:
         raw = _deep_update(raw, parse_override(item))
     return _from_dict(Config, raw)

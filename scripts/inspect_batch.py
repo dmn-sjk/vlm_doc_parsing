@@ -37,6 +37,7 @@ import argparse
 import io
 import logging
 import sys
+from pathlib import Path
 
 import torch
 from PIL import Image as PILImage
@@ -45,6 +46,8 @@ from vlm_doc_parsing.config import load_config
 from vlm_doc_parsing.data.cord import build_datasets
 from vlm_doc_parsing.data.grouping import estimate_lengths
 from vlm_doc_parsing.data.resolution import build_processor, estimate_visual_tokens
+
+DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "sft_1node.yaml"
 
 RED = "\033[31m"
 GREEN = "\033[32m"
@@ -63,14 +66,15 @@ def _check(ok: bool, message: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--config", default=None, help="optional YAML config (see vlm_doc_parsing.config)")
+    p.add_argument("--config", default=str(DEFAULT_CONFIG),
+                   help="YAML config (see vlm_doc_parsing.config)")
     p.add_argument("-o", "--override", action="append", default=[],
                    help="config override, e.g. -o data.max_pixels=802816 (repeatable)")
     p.add_argument("--split", default="validation", choices=["train", "validation", "test"])
     p.add_argument("--batch-size", type=int, default=2,
                    help="examples per batch; >1 exercises the padding / flush_left path")
     p.add_argument("--num-batches", type=int, default=2)
-    p.add_argument("--model-id", default=None, help="defaults to $BASE_MODEL")
+    p.add_argument("--model-id", default=None, help="defaults to the config's model.base_model")
     p.add_argument("--num-proc", type=int, default=2,
                    help="dataset map workers; kept low because this is meant to run on "
                         "the login node, whose memory cgroup SIGKILLs greedy processes")
@@ -82,6 +86,7 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     args = parse_args()
     cfg = load_config(args.config, args.override)
+    model_id = args.model_id or cfg.model.base_model
 
     # Only inspect as many examples as we need; keeps the login-node footprint tiny.
     wanted = args.batch_size * args.num_batches
@@ -89,12 +94,12 @@ def main() -> int:
     cfg.data.max_eval_samples = wanted
     cfg.data.num_proc = args.num_proc
 
-    processor = build_processor(cfg.data, model_id=args.model_id)
+    processor = build_processor(cfg.data, model_id=model_id)
     tokenizer = processor.tokenizer
     image_token_id = processor.image_token_id
     merge_length = processor.image_processor.merge_size ** 2
 
-    datasets = build_datasets(cfg.data, processor=processor, model_id=args.model_id)
+    datasets = build_datasets(cfg.data, processor=processor, model_id=model_id)
     ds = datasets[args.split]
 
     # The length signal Phase 2 will hand to the length-grouped sampler. Asserted against

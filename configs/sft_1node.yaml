@@ -1,15 +1,7 @@
-# Production run: 1 node x 8 A100 (8 ranks), FSDP FULL_SHARD + LoRA, 3 epochs on
-# CORD-v2. Pair with configs/accelerate_fsdp.yaml and slurm/train_1node.sbatch.
-#
-# Sizing (measured on the real CORD-v2 train split, 800 rows, see md_files/PHASE2.md):
-#   image pixels          p50 1.12 Mpx, p95 9.44 Mpx, max 9.44 Mpx
-#   uncapped visual tokens p50 1428, p95 12037   <- why max_pixels is not optional
-#   gt_parse JSON tokens   p50  123, p95   300, max 682
-# With max_pixels = 1280 * 28 * 28 the visual span is capped at 1280 tokens, so the
-# longest sequence we can build is 1280 + ~150 prompt + 682 completion ~= 2.1 k tokens,
-# comfortably under max_length=4096. Nothing gets truncated, which matters because
-# truncation_mode is forced to "keep_start" for vision datasets: a too-small max_length
-# would silently cut the JSON answer off the end of the label.
+# Published run: frozen. A new experiment is a new YAML (it may extend this one).
+# 1 node x 8 A100 (8 ranks), FSDP FULL_SHARD + LoRA, 3 epochs on CORD-v2.
+# Pair with configs/accelerate_fsdp.yaml and slurm/train_1node.sbatch.
+# Resolution and max_length sizing: docs/design-notes.md#sizing.
 
 data:
   dataset_id: naver-clova-ix/cord-v2
