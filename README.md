@@ -46,6 +46,7 @@ Requires [uv](https://docs.astral.sh/uv/) and a Linux x86_64 machine with CUDA 1
 
 ```bash
 cp configs/site/example.env site.env  # set account/partition/storage (see below)
+cp .env.example .env                # HF_TOKEN; WANDB_API_KEY or ~/.netrc
 bash scripts/setup_env.sh          # uv sync --frozen from uv.lock
 bash scripts/prefetch.sh           # model + dataset into $HF_HOME
 
