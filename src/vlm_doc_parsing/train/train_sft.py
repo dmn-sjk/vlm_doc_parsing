@@ -203,7 +203,7 @@ def save_adapter(trainer: SFTTrainer, cfg: Config, output_dir: str, resolved: di
     """Save the LoRA adapter under FSDP, then check it is not empty.
 
     `save_model` all-gathers a FULL_STATE_DICT, so every rank must enter it; rank 0 alone
-    would hang or write empty shards. See docs/adr/0003-fsdp1-full-state-dict.md.
+    would hang or write empty shards. See docs/design-notes.md#fsdp1-and-full-state-dict.
     """
     final_dir = os.path.join(output_dir, "final_adapter")
     trainer.save_model(final_dir)  # all ranks

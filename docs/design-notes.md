@@ -1,7 +1,5 @@
 # Design notes
 
-Full originals: `git show d601e32:md_files/PHASE1.md` and `git show d601e32:md_files/PHASE2.md`.
-
 Library versions for every citation below: trl 1.12.0, transformers 5.16.1, accelerate 1.14.0,
 peft 0.20.0. Line numbers rot on upgrade; re-check them against the installed sources.
 
@@ -18,7 +16,13 @@ Every example is exactly:
 }
 ```
 
-- **Prompt-completion, not `messages`**: see [ADR 0002](adr/0002-prompt-completion-format.md).
+- **Prompt-completion, not `messages`.** The model must learn only the JSON answer. For a
+  `messages` dataset that means `assistant_only_loss=True`, which `SFTTrainer` rejects
+  whenever the dataset has an `image` or `images` column; without it the 615-token system
+  prompt is trained on too. With prompt-completion, TRL's vision collator builds a
+  `completion_mask` and sets every label outside the completion to `-100`
+  (`completion_only_loss=True`, passed explicitly rather than relying on TRL's default).
+  Packing and padding-free batching are unavailable (both rejected for vision datasets).
 - **`content` is a plain string.** The collator's `prepare_multimodal_messages` inserts one
   `{"type": "image"}` block per image ahead of string content. Pre-inserted blocks break:
   `datasets` unifies the struct type of a list column, so a text block comes back as
@@ -106,7 +110,7 @@ turn the p95 receipt into 12k visual tokens: the cap is the main OOM lever.
 - The cap is chosen for VRAM and step time, not to avoid drops: nothing is dropped below
   2048 tokens. 512 resizes the median receipt to 532×798, where small print suffers; 1024
   (728×1092) and 1280 are ~220 visual tokens apart at p50. At 1280 the measured peak is
-  22.6 GiB on one unsharded 40 GB A100 (see `run-log.md`), so it fits with headroom.
+  22.6 GiB on one unsharded 40 GB A100 (see [Scaling](#scaling)), so it fits with headroom.
 - `min_pixels` upscales the smallest images (204×364 → 264 tokens) so a thumbnail never
   becomes a 30-token image the ViT can't read.
 - The longest train sequence is 2393 tokens, under `max_length=4096`, so nothing is
@@ -174,12 +178,12 @@ checkpoint every LoRA linear (pure overhead); transformers checkpoints exactly t
 
 | `accelerate_fsdp.yaml` key | value | why |
 |---|---|---|
-| `fsdp_version` | `1` | see [ADR 0003](adr/0003-fsdp1-full-state-dict.md) |
+| `fsdp_version` | `1` | see [FSDP1 and full state dict](#fsdp1-and-full-state-dict) |
 | `fsdp_sharding_strategy` | `FULL_SHARD` | 16.6 GB bf16 base → ~2 GB of weights per rank at 8 ranks (~1 GB at 16) |
 | `fsdp_use_orig_params` | `true` | frozen ViT + trainable LoRA in one unit; optimizer (created after wrapping) sees original params; PEFT's state-dict filter sees real names |
 | `fsdp_cpu_ram_efficient_loading` | `true` | only local rank 0 reads the 16 GB checkpoint; otherwise 8 × 16 GB of CPU RAM per node |
 | `fsdp_sync_module_states` | `true` | required by the above; all ranks start from rank 0's LoRA init |
-| `fsdp_state_dict_type` | `FULL_STATE_DICT` | `SHARDED_STATE_DICT` saves nothing (ADR 0003) |
+| `fsdp_state_dict_type` | `FULL_STATE_DICT` | `SHARDED_STATE_DICT` saves nothing (see below) |
 | `fsdp_backward_prefetch` | `BACKWARD_PRE` | overlap the next all-gather with the current backward |
 | `mixed_precision` | `bf16` | `MixedPrecision(param/reduce/buffer=bf16)`; only units whose flat param requires grad are upcast to fp32, i.e. the ~81M adapter params |
 
@@ -188,6 +192,17 @@ checkpoint every LoRA linear (pure overhead); transformers checkpoints exactly t
 the model earlier and all 16 ranks read 16 GB each.
 
 `attn_implementation` is `sdpa`: flash-attn is not installed.
+
+### FSDP1 and full state dict
+
+FSDP1 (`fsdp_version: 1`) because `use_orig_params` exists only there, and it is what makes
+units mixing frozen and trainable parameters legal, lets the optimizer (created after
+wrapping) see the original parameters, and keeps the names PEFT's state-dict filter matches
+on. `Trainer.save_model` under FSDP saves only when the state-dict type is
+`FULL_STATE_DICT`, with no else branch: with `SHARDED_STATE_DICT` the adapter is silently
+never written and the job exits 0.
+
+Moving to FSDP2 means replacing `use_orig_params` and the save path together.
 
 ## LoRA targets
 
@@ -210,8 +225,8 @@ per layer, 80,740,352 total (0.97% of 8.29B): ~161 MB bf16 weights, ~646 MB fp32
 ## Adapter saving
 
 `save_adapter` calls `trainer.save_model()` on **all** ranks, then `wait_for_everyone()`, and
-only then does rank 0 write `run_config.yaml`. The gather is a collective; see
-[ADR 0003](adr/0003-fsdp1-full-state-dict.md). Under FSDP `Trainer._save` takes the
+only then does rank 0 write `run_config.yaml`. The full-state-dict gather is a collective:
+guarding the save with `if is_main_process` hangs, or writes empty shards. Under FSDP `Trainer._save` takes the
 `unwrap_model(...).save_pretrained(state_dict=...)` path, so `PeftModel` filters the gathered
 state dict down to LoRA tensors, and the processor is saved next to the adapter (inference
 then reproduces the training resolution).
@@ -220,7 +235,7 @@ then reproduces the training resolution).
 least one non-zero tensor (`lora_B` starts at zero, so an all-zero file means empty shards).
 It logs the check as JSON and raises on failure.
 
-## Multi-node rendezvous
+## Multi-node
 
 `train_multinode.sbatch` requests one SLURM task per node (`--ntasks-per-node=1`):
 `accelerate launch` spawns the node's ranks itself, so more tasks would oversubscribe the
@@ -228,18 +243,73 @@ GPUs. The batch script derives `MASTER_ADDR` (first name from `scontrol show hos
 `MASTER_PORT` (`20000 + SLURM_JOB_ID % 20000`, so concurrent jobs don't collide), exports
 them with `NPROC`, `NNODES` and `TRAIN_CFG`, and runs `srun slurm/launch_node.sh "$@"`.
 `launch_node.sh` passes `SLURM_PROCID` as `--machine_rank` and forwards the CLI arguments as
-an argv, never re-parsed by a shell. `rdzv_backend: static` is why an explicit master
+an argv, never re-parsed by a shell: forwarding through `bash -c "... $*"` stripped the
+quotes from `--set` overrides (job 3108801). `rdzv_backend: static` is why an explicit master
 address/port is the right mechanism.
 
 | var | where | why |
 |---|---|---|
-| `NCCL_SOCKET_IFNAME`, `NCCL_IB_HCA` | Site profile (cluster: `ib0`, `mlx5_0`) | left unset NCCL may bootstrap over a non-IB interface and the nodes never handshake |
+| `NCCL_SOCKET_IFNAME`, `NCCL_IB_HCA` | Site profile | left unset NCCL may bootstrap over a non-IB interface and the nodes never handshake |
 | `NCCL_IB_DISABLE=0` | sbatch | IB verbs, not TCP over IPoIB |
 | `NCCL_DEBUG=INFO`, `NCCL_DEBUG_SUBSYS=INIT,NET` | sbatch | the log shows `NET/IB` was chosen (NCCL writes it to stdout, not stderr) |
 | `TORCH_NCCL_ASYNC_ERROR_HANDLING=1` | sbatch | a hung collective aborts instead of running to the wall-clock limit |
 | `OMP_NUM_THREADS` | sbatch | CPUs per task / GPUs per node |
 
 `ddp_timeout=3600` covers the slow start while rank 0 reads and broadcasts the checkpoint.
+
+## Scaling
+
+Same config, only the rank count changing (A100 40 GB):
+
+| Shape | Job | peak reserved / rank | samples/s | vs 1 GPU | efficiency |
+|---|---|---|---|---|---|
+| 1 GPU, unsharded | 3108487 | 22.62 GiB | 0.556 | 1.0× | — |
+| 2 GPU, `FULL_SHARD` | 3108780 | 18.13 GiB | 0.874 | 1.57× | 79% |
+| 8 GPU, `FULL_SHARD` (Published run) | 3108796 | 12.73 GiB (rank 0: 14.76) | 2.783 | 5.0× | 63% |
+| 16 GPU / 2 nodes, `FULL_SHARD` | 3109090 | 11.29 GiB | 4.503 | 8.1× | 51% |
+
+- Peaks are identical across ranks (except rank 0 at 8 GPU, which also writes), so the wrap
+  policy shards evenly, within and across nodes.
+- The speedup comes from data parallelism, not sharding. `FULL_SHARD` all-gathers parameters
+  on every forward and backward, so plain DDP would likely be slightly faster (not measured).
+  The model already fits on one 40 GB GPU; what FSDP buys is memory (22.6 → 12.7 GiB per
+  rank), which a larger model, a higher resolution cap or full fine-tuning would need.
+- Efficiency falls as ranks are added because 800 examples at batch 32 leave little work per
+  rank per step. Only the 8-GPU row is a full run; the others are 4-10 step probes dominated
+  by model load and NCCL init, so the efficiency column is rough.
+- Hyperparameters were first sized for 80 GB A100s; the 1-GPU probe at Published run
+  settings fit in 40 GB, so none changed.
+
+## Published run
+
+Job 3108796, 1 node × 8, global batch 32 (8 × 2 × accum 2), 3 epochs = 75 optimizer steps:
+`train_runtime` 862 s (15 m 55 s wall), train loss 0.215 → 0.032, adapter check 392/392
+tensors non-zero (80.7M elements).
+
+| Epoch | eval_loss | eval token accuracy |
+|---|---|---|
+| 1 | 0.0533 | 0.9854 |
+| 2 | 0.0404 | 0.9886 |
+| 3 | 0.0381 | 0.9897 |
+
+A 5-step Short run proves plumbing, not learning: job 3108434 (16 samples, batch 1) logged
+0.297, 0.346, 0.061, 0.135, 0.457, which is per-example noise. The VRAM probe (job 3108487,
+8 examples, 2 epochs) fell monotonically, 0.348 → 0.110.
+
+## Site profiles
+
+Everything that differs between machines (SLURM account and partition, storage roots, NCCL
+interfaces, local workarounds) lives in one Site profile, a shell file of
+`: "${VAR:=value}"` lines sourced by `scripts/env.sh`; the experiment (YAML configs, sbatch
+job shapes, `src/`) names no site. A shell profile rather than Hydra or similar, because the
+site facts are consumed by shell first (sbatch flags, `uv`, NCCL, HF caches).
+
+- Precedence is environment > profile > `env.sh` defaults, so a one-off override is an
+  environment variable, never an edit. `:=` treats an empty variable as unset, so a profile
+  value cannot be cleared from the environment.
+- Account and partition stay out of `#SBATCH` lines and are passed by `scripts/submit.sh`.
+  Project variables use the `SITE_` prefix; `SLURM_*` names would leak into the `srun`
+  inside the multi-node job.
 
 ## Library citations
 

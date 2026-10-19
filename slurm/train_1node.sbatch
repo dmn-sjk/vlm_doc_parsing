@@ -1,7 +1,7 @@
 #!/bin/bash
 # Published run: 1 node x 8 A100 (40 GB) = 8 ranks, FSDP FULL_SHARD + LoRA on CORD-v2.
 # Usage: scripts/submit.sh train1n [--set key.path=value ...]
-# Why one node, not two: docs/run-log.md (decisions).
+
 #SBATCH --job-name=vlm-cord-1n8g
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1              # ONE task: accelerate spawns the 8 ranks

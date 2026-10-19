@@ -17,7 +17,7 @@ same_network: true
 main_training_function: main
 
 fsdp_config:
-  fsdp_version: 1  # use_orig_params exists only in FSDP1 (docs/adr/0003-fsdp1-full-state-dict.md)
+  fsdp_version: 1  # use_orig_params exists only in FSDP1 (docs/design-notes.md#fsdp1-and-full-state-dict)
   fsdp_sharding_strategy: FULL_SHARD
   fsdp_reshard_after_forward: FULL_SHARD
   fsdp_offload_params: false  # CPU offload would throttle the run

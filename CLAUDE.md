@@ -29,7 +29,7 @@ src/vlm_doc_parsing/  # the installed package (import vlm_doc_parsing.…)
   infer/          # load base + merge LoRA -> JSON out
   eval/           # parse-rate and field-accuracy scoring
 scripts/          # env.sh, submit.sh, setup/prefetch, one-off utilities
-docs/             # project brief, design notes, run log, ADRs (docs/adr/)
+docs/             # project brief, design notes, run log
 ```
 
 ## Environment (any SLURM cluster or GPU workstation)

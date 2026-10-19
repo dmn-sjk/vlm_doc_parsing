@@ -2,7 +2,7 @@
 
 Prompt-completion (not `messages`) so only the JSON answer is trained on; message `content`
 is a plain string because the collator inserts the image block itself. See
-docs/adr/0002-prompt-completion-format.md and docs/design-notes.md#example-format.
+docs/design-notes.md#example-format.
 """
 
 from __future__ import annotations
