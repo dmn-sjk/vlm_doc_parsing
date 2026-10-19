@@ -96,15 +96,8 @@ docs/        design notes
 ```
 
 
-## Engineering notes
-
-The hard parts:
-
-- **Loss masking is checked by decoding.** TRL *rejects* `assistant_only_loss` for vision datasets, so answer-only loss requires the **prompt-completion** format with `completion_only_loss=True`. `scripts/inspect_batch.py` decodes a real batch and asserts the unmasked span is byte-exactly the target JSON, that image/prompt tokens are `-100`, and that the image-placeholder count matches `image_grid_thw`. It exits non-zero otherwise, and a negative control confirms the assertions bind.
-- **`SFTConfig.max_length` defaults to 1024** with `truncation_mode="keep_start"`. Our sequences run up to 2393 tokens (615 prompt tokens plus ~1230 visual tokens at p50, answer last), so the default keeps the prompt and truncates *exactly the answer*, leaving every label `-100` — with no warning and a perfectly plausible falling loss curve.
-- **`loss_type="chunked_nll"` raises if `lm_head` is wrapped by a PEFT adapter**, which constrains the LoRA target list.
-- **FSDP + LoRA + a frozen ViT** needs `use_orig_params=True`, and the auto-wrap policy must name the real `Qwen2_5_VLDecoderLayer` *and* `Qwen2_5_VLVisionBlock` (the model's own `_no_split_modules`). An `exclude_modules` regex keeps `gate/up/down_proj` from matching 96 modules inside the frozen vision tower.
-- **Adapter saving under FSDP is collective.** `save_model` must be entered by every rank (it all-gathers a `FULL_STATE_DICT`); calling `save_pretrained` on rank 0 alone hangs or writes empty shards. The save is followed by an assertion that the adapter contains non-zero weights.
-- **Multi-rank dataset cache race.** `datasets.map`/`cast_column` name their Arrow cache by content fingerprint, so all ranks race for one path. Fixed with `PartialState().main_process_first()`. Invisible to single-GPU testing — the smoke test passed twice while the 8-rank run could not survive a minute.
 
 
+## License
+
+Code: [MIT](LICENSE). The released LoRA adapter is Apache-2.0, matching its base model `Qwen/Qwen2.5-VL-7B-Instruct`. Training data, [CORD-v2](https://huggingface.co/datasets/naver-clova-ix/cord-v2), is CC BY 4.0; see the [model card](model_card/model_card.md) for its citation.

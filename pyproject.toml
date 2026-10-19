@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Distributed LoRA fine-tuning of Qwen2.5-VL for structured JSON document parsing (TRL + FSDP + SLURM)"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-license = { text = "Apache-2.0" }
+license = { text = "MIT" }
 
 # Versions are pinned exactly, not floated. TRL/PEFT/Accelerate move fast and the VLM code
 # paths in SFTTrainer especially so -- several load-bearing behaviours this project relies

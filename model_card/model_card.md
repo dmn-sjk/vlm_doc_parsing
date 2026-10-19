@@ -16,20 +16,11 @@ datasets:
 ---
 # Qwen2.5-VL-7B LoRA — structured document parsing (CORD-v2)
 
-A LoRA adapter for `Qwen/Qwen2.5-VL-7B-Instruct` that makes the model emit **schema-conformant JSON directly**
-from a receipt image.
+A LoRA adapter for `Qwen/Qwen2.5-VL-7B-Instruct` that makes the model emit **schema-conformant JSON directly** from a receipt image.
 
-**What this adapter buys you is reliability, not new reading ability.** The base
-model can already read receipts reasonably well — its field recall is 0.65. What it cannot
-do is return parseable output: it wraps 96 of 100 answers in a ```json markdown fence, so a
-strict `json.loads` succeeds **3%** of the time. After tuning that is **100%**, and
-precision roughly triples because the model stops padding its answer with commentary and
-invented fields. Treat this as a formatting-and-schema adapter, not a better OCR model.
+**What this adapter buys you is reliability, not new reading ability.** The base model can already read receipts reasonably well — its field recall is 0.65. What it cannot do is return parseable output: it wraps 96 of 100 answers in a \`\`\`json markdown fence, so a strict `json.loads` succeeds **3%** of the time. After tuning that is **100%**, and precision roughly triples because the model stops padding its answer with commentary and invented fields. Treat this as a formatting-and-schema adapter, not a better OCR model.
 
-Trained with TRL `SFTTrainer` in the **prompt-completion** format
-(`completion_only_loss=True`, so the loss covers only the JSON answer) under PyTorch FSDP
-`FULL_SHARD` via Hugging Face Accelerate on a SLURM cluster. The released adapter comes
-from a 1 node x 8 A100 (40 GB) run, 14.4 minutes of training.
+Trained with TRL `SFTTrainer` in the **prompt-completion** format (`completion_only_loss=True`, so the loss covers only the JSON answer) under PyTorch FSDP `FULL_SHARD` via Hugging Face Accelerate on a SLURM cluster. The released adapter comes from a 1 node x 8 A100 (40 GB) run, 14.4 minutes of training.
 
 ## Usage
 
@@ -48,6 +39,7 @@ processor = AutoProcessor.from_pretrained("dmnsjk/qwen2.5-vl-7b-cord-json-lora")
 
 | | |
 | --- | --- |
+| code | Training pipeline and FSDP configs: [https://github.com/dmn-sjk/vlm_doc_parsing](https://github.com/dmn-sjk/vlm_doc_parsing). See [`src/vlm_doc_parsing/infer/predict.py`](https://github.com/dmn-sjk/vlm_doc_parsing/blob/master/src/vlm_doc_parsing/infer/predict.py) there for a complete inference example.   |
 | base model | `Qwen/Qwen2.5-VL-7B-Instruct` |
 | LoRA rank / alpha / dropout | 32 / 64 / 0.05 |
 | target modules | `q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj` |
@@ -61,8 +53,7 @@ processor = AutoProcessor.from_pretrained("dmnsjk/qwen2.5-vl-7b-cord-json-lora")
 
 ## Evaluation
 
-Held-out CORD-v2 **test** split, 100 receipts, greedy decoding. Scored against the base
-checkpoint under an identical prompt, so the delta is attributable to the adapter.
+Held-out CORD-v2 **test** split, 100 receipts, greedy decoding. Scored against the base checkpoint under an identical prompt, so the delta is attributable to the adapter.
 
 | Metric | Base (no adapter) | **This adapter** |
 | --- | --- | --- |
@@ -74,33 +65,27 @@ checkpoint under an identical prompt, so the delta is attributable to the adapte
 | Exact match | 0.000 | **0.420** |
 | Normalised edit similarity | 0.496 | **0.946** |
 
-JSON parse rate is reported separately from field accuracy because a model that
-extracts every field but emits a trailing comma scores zero downstream. "Strict" is
-`json.loads` on the raw generation; "lenient" first strips a markdown code fence.
+JSON parse rate is reported separately from field accuracy because a model that extracts every field but emits a trailing comma scores zero downstream. "Strict" is `json.loads` on the raw generation; "lenient" first strips a markdown code fence.
 
 ## Limitations
 
-- **Small, narrow training set.** 800 training examples, 3 epochs. CORD-v2 is Indonesian
-  restaurant/retail receipts specifically. Do not expect this to transfer to invoices,
-  financial tables, or engineering schematics without retraining — the brief's broader
-  document types were never trained on.
-- **Exact match is 0.42.** More than half of outputs differ from the gold parse
-  somewhere, usually a single OCR-level field (a digit in a price, an abbreviated item
-  name). Normalised edit similarity is 0.946, so errors are typically small rather
-  than structural — but this is not a solved extraction task.
-- **The schema is fixed** by the system prompt this adapter was trained with (see
-  `run_config.yaml`). Prompting it for a different key set will degrade it. The adapter has
-  been specialised toward one output shape.
-- **Field scoring ignores list order** (receipt line items are treated as an unordered
-  bag), so ordering mistakes are not penalised.
-- Resolution is capped at `max_pixels` (see the table above). Documents far denser than a
-  receipt may lose legibility at that cap.
+- **Small, narrow training set.** 800 training examples, 3 epochs. CORD-v2 is Indonesian restaurant/retail receipts specifically. Do not expect this to transfer to invoices, financial tables, or engineering schematics without retraining - the brief's broader document types were never trained on.
+- **Exact match is 0.42.** More than half of outputs differ from the gold parse somewhere, usually a single OCR-level field (a digit in a price, an abbreviated item name). Normalised edit similarity is 0.946, so errors are typically small rather than structural — but this is not a solved extraction task.
+- **The schema is fixed** by the system prompt this adapter was trained with (see `run_config.yaml`). Prompting it for a different key set will degrade it. The adapter has been specialised toward one output shape.
+- **Field scoring ignores list order** (receipt line items are treated as an unordered bag), so ordering mistakes are not penalised.
+- Resolution is capped at `max_pixels` (see the table above). Documents far denser than a receipt may lose legibility at that cap.
 
-## Source code
+## Dataset and citation
 
-Training pipeline, SLURM sbatch scripts and Accelerate/FSDP configs:
-**[https://github.com/dmn-sjk/vlm_doc_parsing](https://github.com/dmn-sjk/vlm_doc_parsing)**
+Trained and evaluated on [CORD-v2](https://huggingface.co/datasets/naver-clova-ix/cord-v2) by NAVER Clova, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). If you use this adapter, please cite the dataset:
 
-See
-[`src/vlm_doc_parsing/infer/predict.py`](https://github.com/dmn-sjk/vlm_doc_parsing/blob/master/src/vlm_doc_parsing/infer/predict.py)
-there for a complete inference example, including `--merge` (`merge_and_unload`) for faster serving.
+```bibtex
+@inproceedings{park2019cord,
+  title     = {CORD: A Consolidated Receipt Dataset for Post-OCR Parsing},
+  author    = {Park, Seunghyun and Shin, Seung and Lee, Bado and Lee, Junyeop and Surh, Jaeheung and Seo, Minjoon and Lee, Hwalsuk},
+  booktitle = {Document Intelligence Workshop at Neural Information Processing Systems},
+  year      = {2019}
+}
+```
+
+
