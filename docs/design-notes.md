@@ -1,7 +1,5 @@
 # Design notes
 
-Library versions for every citation below: trl 1.12.0, transformers 5.16.1, accelerate 1.14.0,
-peft 0.20.0. Line numbers rot on upgrade; re-check them against the installed sources.
 
 ## Example format
 
@@ -244,7 +242,7 @@ GPUs. The batch script derives `MASTER_ADDR` (first name from `scontrol show hos
 them with `NPROC`, `NNODES` and `TRAIN_CFG`, and runs `srun slurm/launch_node.sh "$@"`.
 `launch_node.sh` passes `SLURM_PROCID` as `--machine_rank` and forwards the CLI arguments as
 an argv, never re-parsed by a shell: forwarding through `bash -c "... $*"` stripped the
-quotes from `--set` overrides (job 3108801). `rdzv_backend: static` is why an explicit master
+quotes from `--set` overrides. `rdzv_backend: static` is why an explicit master
 address/port is the right mechanism.
 
 | var | where | why |
@@ -261,12 +259,12 @@ address/port is the right mechanism.
 
 Same config, only the rank count changing (A100 40 GB):
 
-| Shape | Job | peak reserved / rank | samples/s | vs 1 GPU | efficiency |
-|---|---|---|---|---|---|
-| 1 GPU, unsharded | 3108487 | 22.62 GiB | 0.556 | 1.0× | — |
-| 2 GPU, `FULL_SHARD` | 3108780 | 18.13 GiB | 0.874 | 1.57× | 79% |
-| 8 GPU, `FULL_SHARD` (Published run) | 3108796 | 12.73 GiB (rank 0: 14.76) | 2.783 | 5.0× | 63% |
-| 16 GPU / 2 nodes, `FULL_SHARD` | 3109090 | 11.29 GiB | 4.503 | 8.1× | 51% |
+| Shape | peak reserved / rank | samples/s | vs 1 GPU | efficiency |
+|---|---|---|---|---|
+| 1 GPU, unsharded | 22.62 GiB | 0.556 | 1.0× | — |
+| 2 GPU, `FULL_SHARD` | 18.13 GiB | 0.874 | 1.57× | 79% |
+| 8 GPU, `FULL_SHARD` (Published run) | 12.73 GiB (rank 0: 14.76) | 2.783 | 5.0× | 63% |
+| 16 GPU / 2 nodes, `FULL_SHARD` | 11.29 GiB | 4.503 | 8.1× | 51% |
 
 - Peaks are identical across ranks (except rank 0 at 8 GPU, which also writes), so the wrap
   policy shards evenly, within and across nodes.
@@ -282,7 +280,7 @@ Same config, only the rank count changing (A100 40 GB):
 
 ## Published run
 
-Job 3108796, 1 node × 8, global batch 32 (8 × 2 × accum 2), 3 epochs = 75 optimizer steps:
+1 node × 8, global batch 32 (8 × 2 × accum 2), 3 epochs = 75 optimizer steps:
 `train_runtime` 862 s (15 m 55 s wall), train loss 0.215 → 0.032, adapter check 392/392
 tensors non-zero (80.7M elements).
 
@@ -292,9 +290,9 @@ tensors non-zero (80.7M elements).
 | 2 | 0.0404 | 0.9886 |
 | 3 | 0.0381 | 0.9897 |
 
-A 5-step Short run proves plumbing, not learning: job 3108434 (16 samples, batch 1) logged
-0.297, 0.346, 0.061, 0.135, 0.457, which is per-example noise. The VRAM probe (job 3108487,
-8 examples, 2 epochs) fell monotonically, 0.348 → 0.110.
+A 5-step Short run proves plumbing, not learning: on 16 samples at batch 1 it logged
+0.297, 0.346, 0.061, 0.135, 0.457, which is per-example noise. The VRAM probe (8 examples,
+2 epochs) fell monotonically, 0.348 → 0.110.
 
 ## Site profiles
 
@@ -310,59 +308,3 @@ site facts are consumed by shell first (sbatch flags, `uv`, NCCL, HF caches).
 - Account and partition stay out of `#SBATCH` lines and are passed by `scripts/submit.sh`.
   Project variables use the `SITE_` prefix; `SLURM_*` names would leak into the `srun`
   inside the multi-node job.
-
-## Library citations
-
-| Fact | Source |
-|---|---|
-| `assistant_only_loss` rejected for vision datasets | `trl/trainer/sft_trainer.py:1052` |
-| `packing`, `padding_free` rejected for vision | `sft_trainer.py:1043`, `:1047` |
-| `truncation_mode="keep_end"` rejected for vision | `sft_trainer.py:1057` |
-| `max_length` default 1024, `truncation_mode` default `keep_start` | `trl/trainer/sft_config.py:201`, `:209` |
-| Vision collator chosen | `sft_trainer.py:1221-1228` |
-| Prompt-completion collation, `completion_mask` → `-100` | `sft_trainer.py:693-712`, `:774` |
-| `pad_to_multiple_of` must be `None` | `sft_trainer.py:693-696` |
-| Vision tokens left unmasked in `labels` by the collator | `sft_trainer.py:686-688` |
-| `completion_only_loss=None` resolves to `True` for prompt-completion | `sft_trainer.py:1200-1203` |
-| `shuffle_dataset` defaults to `False` | `trl/trainer/sft_config.py:217` |
-| Collator passes `padding_side` per call | `sft_trainer.py:718`, `:725` |
-| `mm_token_type_ids` concatenated over the completion | `sft_trainer.py:742` |
-| `prepare_multimodal_messages` image-block insertion | `trl/data_utils.py:80-93` |
-| Signature columns | `sft_trainer.py:1683` |
-| Vision datasets skip dataset preparation | `sft_trainer.py:1270-1275` |
-| `chunked_nll` rejects a PEFT `lm_head` | `sft_trainer.py:1333` |
-| `enable_input_require_grads()` for PEFT + checkpointing | `sft_trainer.py:1148` |
-| Non-reentrant default injected only for transformers < 5 | `sft_trainer.py:1350` |
-| Non-reentrant default when kwargs are `None` | `transformers/modeling_utils.py:3205` |
-| Checkpointing applies to `GradientCheckpointingLayer` | `modeling_utils.py:3234-3260` |
-| `torch_dtype` → `dtype` deprecation | `modeling_utils.py:1490`, `:4131` |
-| Rank-0 checkpoint read under FSDP | `modeling_utils.py:4790-4797` |
-| `is_fsdp_enabled()` requires initialised `torch.distributed` | `transformers/distributed/fsdp.py:41-47` |
-| PEFT replaces the wrap policy | `transformers/distributed/fsdp.py:257-269`, called from `trainer.py:1621` |
-| Gradient checkpointing and FSDP activation checkpointing exclusive | `transformers/trainer.py:844` |
-| Sampler built from the stripped dataset | `trainer.py:985`, `:1003` |
-| Length column read for `group_by_length` | `trainer.py:1036-1044` |
-| Eval sampler branches on `train_sampling_strategy` | `trainer.py:1064` |
-| `LengthGroupedSampler` falls back to `input_ids` | `trainer_pt_utils.py:540` |
-| Optimizer created after wrapping | `trainer.py:1591` |
-| `self.model = self.model_wrapped` under FSDP | `trainer.py:1646` |
-| FULL_STATE_DICT save branch, no else | `trainer.py:3826-3830` |
-| `_save` via `unwrap_model(...).save_pretrained` | `trainer.py:3877` |
-| `warmup_steps` < 1 is a ratio | `transformers/training_args.py:2119-2121` |
-| `group_by_length` renamed to `train_sampling_strategy` | `training_args.py:1355-1366` |
-| Wrap class definitions | `models/qwen2_5_vl/modeling_qwen2_5_vl.py:692`, `:294`; `_no_split_modules` `:330`, `:881`; `ForConditionalGeneration` `:1268` |
-| Vision MLP has `gate/up/down_proj` | `modeling_qwen2_5_vl.py:85`, `:294` |
-| `_supports_sdpa = True` | `modeling_qwen2_5_vl.py:333` |
-| Processor folds `min_pixels`/`max_pixels` into `size` | `image_processing_qwen2_vl.py:110-118`; both required `:120-129` |
-| `factor = patch_size * merge_size` | `image_processing_qwen2_vl.py:226`, `:280` |
-| PEFT OR wrap policy | `peft/utils/other.py:1259-1296` |
-| `exclude_modules` list form: exact key or `.suffix` | `peft/tuners/tuners_utils.py:1907-1914`; suffix matching `:1933` |
-| `use_orig_params` FSDP1 only | `accelerate/utils/dataclasses.py:1756-1759` |
-| bf16 `MixedPrecision` | `dataclasses.py:2117-2124` |
-| FULL_STATE_DICT gathers to CPU on rank 0 | `dataclasses.py:2039-2041` |
-| `set_auto_wrap_policy` rewrites only the two built-in policies | `accelerate/accelerator.py:1925`; `dataclasses.py:2069`, `:2083` |
-| FSDP activation checkpointing uses the wrap policy | `accelerator.py:1972-1979` |
-| Trainable units upcast to fp32 | `accelerator.py:1990-2029` |
-| `get_state_dict` all-gather (`rank0_only=True`) | `accelerator.py:4060-4067` |
-| `sync_module_states` required with RAM-efficient loading | `accelerate/utils/launch.py:306` |
-| `FSDP_TRANSFORMER_CLS_TO_WRAP` exported | `launch.py:321` |

@@ -22,9 +22,7 @@ Held-out test split, 100 receipts, greedy decoding, scored against the base chec
 
 *Strict* is `json.loads` on the raw generation. *Lenient* first strips a markdown fence. It does no other repair and does not check the schema. Field, exact-match and edit metrics are computed on the lenient parse, so the base model's field scores already include the fence fix.
 
-**What the adapter buys is reliability, not new reading ability.** The base model already reads receipts adequately - recall 0.65. What it cannot do is return parseable output: it wraps 96 of 100 answers in a ```` ```json ```` markdown fence, so strict `json.loads` succeeds **3 %** of the time. Precision triples because the tuned model stops padding answers with commentary and invented fields (2 918 predicted fields vs 1 291 gold, against 1 259 after tuning).
-
-This is exactly why **parse rate is measured separately from field accuracy** — a single "accuracy" number would have hidden the entire finding.
+**Most of the gain is reliability.** The base model almost always wraps its answer in a ```` ```json ```` fence (96 of 100 receipts), so plain `json.loads` works only 3 % of the time. After tuning it works every time. Precision triples because the tuned model stops padding its answers with commentary and made-up fields (2 918 predicted fields vs 1 291 gold, down to 1 259 after tuning). Recall goes up too, from 0.65 to 0.84. Part of that is the model learning the schema rather than reading better: a field only counts if both its key path and value match, so a correct value under the wrong key is a miss.
 
 ## FSDP
 

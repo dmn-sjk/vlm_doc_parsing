@@ -18,7 +18,7 @@ datasets:
 
 A LoRA adapter for `Qwen/Qwen2.5-VL-7B-Instruct` that makes the model emit **schema-conformant JSON directly** from a receipt image.
 
-**What this adapter buys you is reliability, not new reading ability.** The base model can already read receipts reasonably well — its field recall is 0.65. What it cannot do is return parseable output: it wraps 96 of 100 answers in a \`\`\`json markdown fence, so a strict `json.loads` succeeds **3%** of the time. After tuning that is **100%**, and precision roughly triples because the model stops padding its answer with commentary and invented fields. Treat this as a formatting-and-schema adapter, not a better OCR model.
+**Most of what this adapter adds is reliability.** The base model almost always wraps its answer in a \`\`\`json fence (96 of 100 receipts), so plain `json.loads` works only **3%** of the time. With the adapter it works **100%** of the time. Precision roughly triples because the model stops padding its answers with commentary and made-up fields. Recall goes up too, from 0.65 to 0.84, though some of that is probably the model learning the schema rather than reading better. A field only counts if both its key path and value match, so the current numbers can't separate the two.
 
 Trained with TRL `SFTTrainer` in the **prompt-completion** format (`completion_only_loss=True`, so the loss covers only the JSON answer) under PyTorch FSDP `FULL_SHARD` via Hugging Face Accelerate on a SLURM cluster. The released adapter comes from a 1 node x 8 A100 (40 GB) run, 14.4 minutes of training.
 
@@ -69,7 +69,7 @@ JSON parse rate is reported separately from field accuracy because a model that 
 
 ## Limitations
 
-- **Small, narrow training set.** 800 training examples, 3 epochs. CORD-v2 is Indonesian restaurant/retail receipts specifically. Do not expect this to transfer to invoices, financial tables, or engineering schematics without retraining - the brief's broader document types were never trained on.
+- **Small, narrow training set.** 800 training examples, 3 epochs. CORD-v2 is Indonesian restaurant/retail receipts specifically. Do not expect this to transfer to invoices, financial tables, or engineering schematics without retraining.
 - **Exact match is 0.42.** More than half of outputs differ from the gold parse somewhere, usually a single OCR-level field (a digit in a price, an abbreviated item name). Normalised edit similarity is 0.946, so errors are typically small rather than structural — but this is not a solved extraction task.
 - **The schema is fixed** by the system prompt this adapter was trained with (see `run_config.yaml`). Prompting it for a different key set will degrade it. The adapter has been specialised toward one output shape.
 - **Field scoring ignores list order** (receipt line items are treated as an unordered bag), so ordering mistakes are not penalised.
