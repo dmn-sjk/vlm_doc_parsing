@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Download the model and dataset into $HF_HOME on a login node; jobs then run offline.
+# Download the model and dataset into $HF_HOME.
 set -euo pipefail
 source "$(dirname "$0")/env.sh"
 
